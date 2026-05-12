@@ -88,7 +88,7 @@ async function(args) {
   var msgEdges = (t.slide_messages && t.slide_messages.edges) || [];
   var messages = msgEdges.map(function(e) {
     var m = e.node || {};
-    return {
+    var msg = {
       id: m.message_id || m.id,
       text: m.text_body || null,
       sender_fbid: m.sender_fbid,
@@ -96,6 +96,23 @@ async function(args) {
       timestamp_ms: m.timestamp_ms,
       content_type: m.content_type
     };
+
+    // Parse media attachments (images, videos, etc.)
+    var content = m.content || {};
+    var attachments = content.attachments || [];
+    if (attachments.length > 0) {
+      msg.attachments = attachments.map(function(a) {
+        return {
+          type: a.__typename || null,
+          url: a.attachment_cdn_url || a.preview_cdn_url || null,
+          preview_url: a.preview_cdn_url || null,
+          width: a.preview_width || null,
+          height: a.preview_height || null
+        };
+      });
+    }
+
+    return msg;
   });
 
   return {
