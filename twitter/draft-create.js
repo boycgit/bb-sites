@@ -8,7 +8,7 @@
     "title": { "required": false, "description": "标题；默认取 md 一级标题" },
     "digest": { "required": false, "description": "摘要；默认取 md 首段" },
     "link": { "required": false, "description": "全文链接（强烈建议）" },
-    "images": { "required": false, "description": "JSON 本地图 [{id,name,mime,base64}]（CLI 预处理）" },
+    "images": { "required": false, "description": "JSON 本地图 [{id,name,mime,base64,alt}]；alt 来自 md ![alt](path)" },
     "videos": { "required": false, "description": "JSON 视频 [{name,mime,base64}|{url}]" },
     "maxLength": { "required": false, "description": "文案最大长度，默认 280" },
     "prefer": { "required": false, "description": "媒体优先：image（默认）或 video" }
@@ -48,15 +48,15 @@ async function (args) {
     return { error: "Invalid videos JSON" };
   }
 
-  // Collect remote images from markdown if not already packaged
+  // Collect remote images from markdown if not already packaged (keep ![alt](url))
   if (args.markdown) {
-    const re = /!\[[^\]]*\]\((https?:\/\/[^)]+)\)/g;
+    const re = /!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g;
     let m;
     const seen = new Set(images.map((i) => i.url).filter(Boolean));
     while ((m = re.exec(args.markdown))) {
-      if (seen.has(m[1])) continue;
-      seen.add(m[1]);
-      images.push({ url: m[1] });
+      if (seen.has(m[2])) continue;
+      seen.add(m[2]);
+      images.push({ url: m[2], alt: (m[1] || "").trim() });
     }
     const vre = /<video[^>]+src=["']([^"']+)["']/gi;
     while ((m = vre.exec(args.markdown))) {
@@ -66,6 +66,7 @@ async function (args) {
 
   const prefer = (args.prefer || "image").toLowerCase();
   const mediaIds = [];
+  const mediaAlts = [];
   const warnings = [];
   let imageCount = 0;
   let videoCount = 0;
@@ -75,11 +76,12 @@ async function (args) {
       warnings.push("skipped image: max 4 images");
       return;
     }
+    const alt = (img.alt || img.title || "").trim();
     let up;
     if (img.base64) {
-      up = await twitterUploadBase64Image(img.base64, img.mime || "image/jpeg", img.name);
+      up = await twitterUploadBase64Image(img.base64, img.mime || "image/jpeg", img.name, alt);
     } else if (img.url) {
-      up = await twitterUploadRemoteUrl(img.url);
+      up = await twitterUploadRemoteUrl(img.url, alt);
     } else {
       return;
     }
@@ -87,7 +89,11 @@ async function (args) {
       warnings.push((img.name || img.url || "image") + ": " + up.error);
       return;
     }
+    if (up.altWarning) {
+      warnings.push((img.name || img.url || "image") + " alt: " + up.altWarning);
+    }
     mediaIds.push(up.mediaId);
+    if (up.altText) mediaAlts.push({ mediaId: up.mediaId, altText: up.altText });
     imageCount++;
   }
 
@@ -143,6 +149,7 @@ async function (args) {
     link: built.link || null,
     mediaIds,
     mediaCount: { images: imageCount, videos: videoCount },
+    mediaAlts,
     draftUrl: created.draftUrl,
     hint: created.hint,
   };

@@ -261,18 +261,57 @@ async function twitterUploadMedia(opts) {
   };
 }
 
-async function twitterUploadBase64Image(base64, mime, name) {
+/**
+ * Set accessibility alt text on an uploaded image (max 1000 chars).
+ * POST upload.x.com/1.1/media/metadata/create.json
+ */
+async function twitterSetMediaAltText(mediaId, altText) {
+  const text = String(altText || "").trim();
+  if (!mediaId || !text) return { ok: true, skipped: true };
+  const clipped = text.slice(0, 1000);
+  const path = "/1.1/media/metadata/create.json";
+  const h = await twitterAuthHeaders(path, "POST");
+  if (h.error) return h;
+  h["Content-Type"] = "application/json";
+  const resp = await fetch("https://upload.x.com/1.1/media/metadata/create.json", {
+    method: "POST",
+    credentials: "include",
+    headers: h,
+    body: JSON.stringify({
+      media_id: String(mediaId),
+      alt_text: { text: clipped },
+    }),
+  });
+  // 200 / 202 both ok
+  if (resp.status >= 200 && resp.status < 300) {
+    return { ok: true, altText: clipped };
+  }
+  const body = await resp.text();
+  return { error: "alt_text failed HTTP " + resp.status, hint: body.slice(0, 200) };
+}
+
+async function twitterUploadBase64Image(base64, mime, name, altText) {
   mime = mime || "image/jpeg";
   const bytes = _base64ToUint8Array(base64);
-  return twitterUploadMedia({
+  const up = await twitterUploadMedia({
     bytes,
     mediaType: mime,
     mediaCategory: mime === "image/gif" ? "tweet_gif" : "tweet_image",
     name: name || "image",
   });
+  if (up.error) return up;
+  if (altText) {
+    const meta = await twitterSetMediaAltText(up.mediaId, altText);
+    if (meta.error) {
+      up.altWarning = meta.error + (meta.hint ? " " + meta.hint : "");
+    } else {
+      up.altText = meta.altText || String(altText).trim().slice(0, 1000);
+    }
+  }
+  return up;
 }
 
-async function twitterUploadRemoteUrl(url) {
+async function twitterUploadRemoteUrl(url, altText) {
   try {
     const resp = await fetch(url, { credentials: "omit", mode: "cors" });
     if (!resp.ok) return { error: "HTTP " + resp.status + " fetching media", hint: url };
@@ -286,11 +325,22 @@ async function twitterUploadRemoteUrl(url) {
       else if (/\.(mp4|mov|webm)(\?|$)/i.test(url)) mediaType = "video/mp4";
       else mediaType = "image/jpeg";
     }
-    return twitterUploadMedia({
+    const up = await twitterUploadMedia({
       bytes: buf,
       mediaType,
       name: (url.split("?")[0].split("/").pop() || "remote").slice(0, 80),
     });
+    if (up.error) return up;
+    // Alt text only applies to images/gifs, not video
+    if (altText && !mediaType.startsWith("video/")) {
+      const meta = await twitterSetMediaAltText(up.mediaId, altText);
+      if (meta.error) {
+        up.altWarning = meta.error + (meta.hint ? " " + meta.hint : "");
+      } else {
+        up.altText = meta.altText || String(altText).trim().slice(0, 1000);
+      }
+    }
+    return up;
   } catch (e) {
     return { error: "Failed to fetch remote media (CORS?)", hint: url + " " + String(e) };
   }
