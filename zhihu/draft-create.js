@@ -141,11 +141,17 @@ async function (args) {
   const out = {
     draftId: result.draftId,
     title: title,
+    // ONLY openable link for unpublished drafts (public /p/{id} shows 荒原)
     editUrl: result.editUrl,
-    url: result.url,
+    draftUrl: result.draftUrl || result.editUrl,
+    manageUrl: result.manageUrl || "https://www.zhihu.com/creator/manage/creation/draft",
+    state: result.state || "draft",
     uploadedImages: uploadedImages,
     uploadedVideos: uploadedVideos,
     author: login.name,
+    hint:
+      "请在已登录知乎的 bb-browser Chrome 中打开 editUrl（必须带 /edit）。" +
+      "未发布时打开无 /edit 的公开链接会显示「荒原」。也可在创作中心草稿箱打开。",
   };
   if (warnings.length) out.warnings = warnings;
   return out;

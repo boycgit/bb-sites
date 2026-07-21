@@ -9,7 +9,10 @@
 bb-browser site zhihu/draft-create ./draft.md --json
 ```
 
-打开返回的 `editUrl` 预览后，在知乎后台人工发布。
+打开返回的 **`editUrl`**（必须以 `/edit` 结尾）预览后，在知乎后台人工发布。
+
+> **注意：** 未发布草稿的公开链接 `https://zhuanlan.zhihu.com/p/{id}` 会显示「你似乎来到了没有知识存在的荒原」，
+> 即使作者已登录也是如此。请只用 `editUrl`（`/p/{id}/edit`），或到创作中心草稿箱打开。
 
 ### 参数
 
@@ -18,6 +21,14 @@ bb-browser site zhihu/draft-create ./draft.md --json
 | `markdown` | 正文或 `.md` 路径 |
 | `--title` | 默认 md 一级标题 |
 | `--draftId` | 更新已有草稿 |
+
+### 返回字段
+
+| 字段 | 说明 |
+|------|------|
+| `editUrl` / `draftUrl` | 编辑页（唯一可打开的草稿链接） |
+| `manageUrl` | 创作中心 → 草稿箱 |
+| `draftId` | 草稿 id（字符串，勿当 Number 解析） |
 
 ### 媒体
 

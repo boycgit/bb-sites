@@ -7,6 +7,13 @@
 // - PATCH /api/articles/{id}/draft  body: { title, content, comment_permission, ... }
 // - POST /api/uploaded_images  FormData: picture=<file>, source=article  → { src, hash, data-rawwidth, data-rawheight }
 // - Auth: Cookie + _xsrf as X-Xsrftoken / x-xsrf-token
+//
+// URL pitfalls (verified 2026-07):
+// - API `url` is https://zhuanlan.zhihu.com/p/{id} WITHOUT /edit.
+// - For unpublished drafts, that public URL always shows 「你似乎来到了没有知识存在的荒原」
+//   even for the author while logged in. Only /p/{id}/edit opens the editor.
+// - my_drafts list returns numeric `id` (not string) → JSON.parse can lose precision
+//   above Number.MAX_SAFE_INTEGER. Always extract id as string from raw JSON / url.
 
 function zhihuGetXsrf() {
   const m = document.cookie.match(/(?:^|; )_xsrf=([^;]+)/);
@@ -141,6 +148,74 @@ function zhihuImgHtml(img) {
   );
 }
 
+/**
+ * Extract article/draft id as a decimal string from API JSON text or a /p/{id} url.
+ * Never trust JSON.parse Number for Zhihu snowflake ids (often > MAX_SAFE_INTEGER).
+ */
+function zhihuExtractId(rawOrUrl, parsed) {
+  const s = String(rawOrUrl || "");
+  // Prefer quoted id string in JSON (create API returns this)
+  let m = s.match(/"id"\s*:\s*"(\d{10,})"/);
+  if (m) return m[1];
+  // Unquoted numeric id in JSON (my_drafts list) — still capture full digit run from raw text
+  m = s.match(/"id"\s*:\s*(\d{10,})/);
+  if (m) return m[1];
+  // From article url field
+  m = s.match(/zhuanlan\.zhihu\.com\/p\/(\d{10,})/);
+  if (m) return m[1];
+  m = s.match(/\/p\/(\d{10,})/);
+  if (m) return m[1];
+  if (parsed && parsed.id != null) {
+    // Last resort; may already be precision-damaged if it was a Number
+    const as = String(parsed.id);
+    if (/^\d{10,}$/.test(as)) return as;
+  }
+  return null;
+}
+
+function zhihuDraftUrls(draftId) {
+  const id = String(draftId || "").replace(/\D/g, "");
+  const editUrl = "https://zhuanlan.zhihu.com/p/" + id + "/edit";
+  return {
+    draftId: id,
+    editUrl: editUrl,
+    // Alias (weixin-style). Public /p/{id} is NOT openable before publish.
+    draftUrl: editUrl,
+    manageUrl: "https://www.zhihu.com/creator/manage/creation/draft",
+  };
+}
+
+/** Verify draft is readable; returns {ok, title?, state?} or {error, hint} */
+async function zhihuVerifyDraft(draftId) {
+  const id = String(draftId || "").replace(/\D/g, "");
+  if (!id) return { error: "Missing draft id" };
+  const resp = await fetch("https://zhuanlan.zhihu.com/api/articles/" + id + "/draft", {
+    credentials: "include",
+    headers: zhihuAuthHeaders(false),
+  });
+  const text = await resp.text();
+  if (!resp.ok) {
+    return {
+      error: "Draft verify failed HTTP " + resp.status,
+      hint:
+        text.slice(0, 200) +
+        " — open manageUrl or re-login; do not open public /p/{id} (shows 荒原 until published)",
+    };
+  }
+  let data = {};
+  try {
+    data = JSON.parse(text);
+  } catch {
+    /* ignore */
+  }
+  return {
+    ok: true,
+    title: data.title,
+    state: data.state,
+    type: data.type,
+  };
+}
+
 /** Lightweight Markdown → Zhihu-friendly HTML */
 function zhihuMdToHtml(md) {
   if (!md) return "";
@@ -246,17 +321,20 @@ function zhihuMdToHtml(md) {
       html.push("<pre><code>" + esc(codes[idx] || "") + "</code></pre>");
       continue;
     }
-    // pass through already-built img html blocks
-    if (line.indexOf("<p><img ") === 0 || line.indexOf("@@IMG") >= 0) {
-      html.push(line.indexOf("@@IMG") >= 0 ? "<p>" + line + "</p>" : line);
+    // Pass through already-built HTML blocks (img / video notes / etc.)
+    // Must not run through esc()/inline() or tags become visible text.
+    if (/^\s*</.test(line) && /<\/[a-zA-Z][^>]*>\s*$/.test(line)) {
+      html.push(line);
+      continue;
+    }
+    if (line.indexOf("@@IMG") >= 0) {
+      html.push("<p>" + line + "</p>");
       continue;
     }
     html.push("<p>" + inline(line) + "</p>");
   }
   closeLists();
-  let out = html.join("");
-  // restore code blocks already handled; restore IMG markers if any left as raw
-  return out;
+  return html.join("");
 }
 
 async function zhihuCreateDraft(title, content) {
@@ -276,22 +354,39 @@ async function zhihuCreateDraft(title, content) {
   } catch {
     return { error: "Create draft parse error HTTP " + resp.status, hint: text.slice(0, 200) };
   }
-  if (!resp.ok || !data.id) {
+  const draftId = zhihuExtractId(text, data);
+  if (!resp.ok || !draftId) {
     return {
-      error: (data.error && data.error.message) || ("Create failed HTTP " + resp.status),
+      error: (data && data.error && data.error.message) || ("Create failed HTTP " + resp.status),
       hint: text.slice(0, 300),
     };
   }
+  const urls = zhihuDraftUrls(draftId);
+  const verify = await zhihuVerifyDraft(draftId);
+  if (verify.error) {
+    return {
+      error: "Draft created but not readable: " + verify.error,
+      hint: verify.hint,
+      draftId: urls.draftId,
+      editUrl: urls.editUrl,
+      manageUrl: urls.manageUrl,
+    };
+  }
   return {
-    draftId: String(data.id),
-    title: data.title,
-    editUrl: "https://zhuanlan.zhihu.com/p/" + data.id + "/edit",
-    url: data.url || ("https://zhuanlan.zhihu.com/p/" + data.id),
+    draftId: urls.draftId,
+    title: (data && data.title) || title,
+    editUrl: urls.editUrl,
+    draftUrl: urls.draftUrl,
+    manageUrl: urls.manageUrl,
+    state: verify.state || "draft",
+    // Intentionally NO public `url`: /p/{id} is 荒原 until published.
   };
 }
 
 async function zhihuUpdateDraft(draftId, title, content) {
-  const resp = await fetch("https://zhuanlan.zhihu.com/api/articles/" + draftId + "/draft", {
+  const id = zhihuExtractId(String(draftId), { id: draftId }) || String(draftId).replace(/\D/g, "");
+  if (!id) return { error: "Invalid draftId", hint: String(draftId) };
+  const resp = await fetch("https://zhuanlan.zhihu.com/api/articles/" + id + "/draft", {
     method: "PATCH",
     credentials: "include",
     headers: zhihuAuthHeaders(true),
@@ -307,11 +402,14 @@ async function zhihuUpdateDraft(draftId, title, content) {
     const text = await resp.text();
     return { error: "Update draft HTTP " + resp.status, hint: text.slice(0, 300) };
   }
+  const urls = zhihuDraftUrls(id);
   return {
-    draftId: String(draftId),
+    draftId: urls.draftId,
     title: title,
-    editUrl: "https://zhuanlan.zhihu.com/p/" + draftId + "/edit",
-    url: "https://zhuanlan.zhihu.com/p/" + draftId,
+    editUrl: urls.editUrl,
+    draftUrl: urls.draftUrl,
+    manageUrl: urls.manageUrl,
+    state: "draft",
   };
 }
 
