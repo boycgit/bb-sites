@@ -69,7 +69,7 @@ bb-browser site reddit/thread <url>        # 带参数运行
 | 平台 | 命令 | 说明 |
 |------|------|------|
 | YouTube | `youtube/search`, `youtube/video`, `youtube/comments`, `youtube/channel`, `youtube/feed`, `youtube/transcript` | 搜索、视频详情、评论、频道、Feed、字幕文稿 |
-| B站 | `bilibili/me`, `bilibili/popular`, `bilibili/ranking`, `bilibili/search`, `bilibili/video`, `bilibili/comments`, `bilibili/feed`, `bilibili/history`, `bilibili/trending` | 完整 B站 支持 — 9 个适配器 |
+| B站 | `bilibili/me`, `bilibili/popular`, `bilibili/ranking`, `bilibili/search`, `bilibili/video`, `bilibili/comments`, `bilibili/feed`, `bilibili/history`, `bilibili/trending`, `bilibili/draft-create` | 完整 B站 支持 + 视频草稿上传 |
 | IMDb | `imdb/search` | IMDb 电影搜索 |
 | Genius | `genius/search` | 歌曲/歌词搜索 |
 | 豆瓣 | `douban/search`, `douban/movie`, `douban/movie-hot`, `douban/movie-top`, `douban/top250`, `douban/comments` | 豆瓣电影 — 搜索、详情、排行、Top 250、短评 |
