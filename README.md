@@ -116,7 +116,7 @@ bb-browser site reddit/thread <url>        # run with args
 | Platform | Commands | Description |
 |----------|----------|-------------|
 | Jike | `jike/feed`, `jike/search` | 即刻 — recommended feed & search |
-| Xiaohongshu | `xiaohongshu/me`, `xiaohongshu/feed`, `xiaohongshu/search`, `xiaohongshu/note`, `xiaohongshu/comments`, `xiaohongshu/user_posts` | Profile, feed, search, note details, comments, and user posts |
+| Xiaohongshu | `xiaohongshu/me`, `xiaohongshu/feed`, `xiaohongshu/search`, `xiaohongshu/note`, `xiaohongshu/comments`, `xiaohongshu/user_posts`, `xiaohongshu/draft-create` | Profile, feed, search, note details, comments, user posts, and creator long-article local drafts |
 
 > Xiaohongshu adapters now use a mix of current Pinia store state, in-page routing, and SSR state parsing. This avoids relying on stale XHR paths that no longer fire consistently on the live site.
 
@@ -176,6 +176,9 @@ bb-browser site xiaohongshu/search "穿搭"
 bb-browser site xiaohongshu/note 6932814d000000001e034e67
 bb-browser site xiaohongshu/comments 6932814d000000001e034e67
 bb-browser site xiaohongshu/user_posts 67c99deb00000000070013e9
+# Long-article draft (creator.xiaohongshu.com, local IndexedDB — not auto-publish)
+bb-browser open "https://creator.xiaohongshu.com/publish/publish?source=official&from=tab_switch&target=article"
+bb-browser site xiaohongshu/draft-create ./draft.md --json
 ```
 
 ## Writing a Site Adapter
