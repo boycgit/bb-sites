@@ -2,7 +2,8 @@
 // Auto-loaded before each xiaohongshu/* adapter in this directory.
 // Draft reverse notes (2026-07):
 // - Long-article editor: TipTap on .ProseMirror.editor
-// - Image node attrs: { imgs: [{ url, fileId, width, height }] }
+// - Image node attrs: { imgs: [{ src, fileId, width, height, percent, desc }] }
+//   IMPORTANT: TipTap renderHTML uses e.src (NOT e.url). url field renders blank <img>.
 // - Upload via webpack Uploader: scene=image|video, bizName=spectrum
 // - Drafts: IndexedDB draft-database-v1 / article-draft (local only)
 // - Title max 64 chars; no markdown — render then setContent
@@ -182,10 +183,12 @@ async function xhsDraftUploadImageDataUrl(dataUrl) {
     if (!data || !(data.previewUrl || data.fileId)) {
       return { error: "Upload returned empty", hint: JSON.stringify(data).slice(0, 200) };
     }
+      const src = data.previewUrl || data.url || "";
     return {
       fileId: data.fileId,
-      url: data.previewUrl || data.url || "",
-      previewUrl: data.previewUrl || data.url || "",
+      src: src,
+      url: src,
+      previewUrl: src,
       width: data.width || 0,
       height: data.height || 0,
     };
@@ -230,10 +233,12 @@ async function xhsDraftUploadBlob(blob, scene) {
         hint: JSON.stringify(res).slice(0, 300),
       };
     }
+    const src = data.previewUrl || data.url || "";
     return {
       fileId: data.fileId,
-      url: data.previewUrl || data.url || "",
-      previewUrl: data.previewUrl || data.url || "",
+      src: src,
+      url: src,
+      previewUrl: src,
       width: data.width || 0,
       height: data.height || 0,
     };
@@ -289,7 +294,7 @@ function xhsDraftExtractTitle(md, fallback) {
 
 /**
  * Markdown → TipTap/ProseMirror JSON doc.
- * imagesMap: placeholder id | original path → { url, fileId, width, height, alt }
+ * imagesMap: placeholder id | original path → { src, fileId, width, height, alt }
  * videoNotes: placeholder id → note text
  */
 function xhsDraftMdToDoc(md, imagesMap, videoNotes) {
@@ -311,76 +316,40 @@ function xhsDraftMdToDoc(md, imagesMap, videoNotes) {
     content.push({ type: "paragraph", content: parts });
   }
 
-  function inlineTokens(s) {
-    // very light inline: **bold**, *italic*, `code`, [text](url)
-    const parts = [];
-    let rest = s;
-    const re =
-      /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g;
-    let last = 0;
-    let m;
-    while ((m = re.exec(s)) !== null) {
-      if (m.index > last) {
-        parts.push({ type: "text", text: s.slice(last, m.index) });
-      }
-      const tok = m[0];
-      if (tok.startsWith("**")) {
-        parts.push({
-          type: "text",
-          marks: [{ type: "bold" }],
-          text: tok.slice(2, -2),
-        });
-      } else if (tok.startsWith("*")) {
-        parts.push({
-          type: "text",
-          marks: [{ type: "italic" }],
-          text: tok.slice(1, -1),
-        });
-      } else if (tok.startsWith("`")) {
-        parts.push({
-          type: "text",
-          marks: [{ type: "code" }],
-          text: tok.slice(1, -1),
-        });
-      } else if (tok.startsWith("[")) {
-        const lm = tok.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-        if (lm) {
-          parts.push({
-            type: "text",
-            marks: [{ type: "link", attrs: { href: lm[2], target: "_blank" } }],
-            text: lm[1],
-          });
-        } else {
-          parts.push({ type: "text", text: tok });
-        }
-      }
-      last = m.index + tok.length;
-    }
-    if (last < s.length) parts.push({ type: "text", text: s.slice(last) });
-    // TipTap may not have link/code marks — strip marks on failure later via plain text
-    return parts.length ? parts : [{ type: "text", text: s }];
-  }
-
-  function plainInline(s) {
-    // Safer: only bold/italic as text decoration by unicode/emphasis in plain text if marks fail
-    // Use simple text nodes only for maximum compatibility
-    return s ? [{ type: "text", text: s }] : [];
-  }
-
   // Prefer plain text nodes (bold/italic marks may be unavailable depending on schema)
   function toInline(s) {
-    // Expand simple ** ** by keeping asterisks removed as visual emphasis via text only
     const cleaned = s
       .replace(/\*\*([^*]+)\*\*/g, "$1")
       .replace(/\*([^*]+)\*/g, "$1")
       .replace(/`([^`]+)`/g, "$1");
-    // Keep markdown links as "text (url)" if not image/video placeholders
     const withLinks = cleaned.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function (_, a, href) {
       if (imagesMap[href] || videoNotes[href]) return a;
       if (/^https?:\/\//i.test(href)) return a + " " + href;
       return a;
     });
     return withLinks ? [{ type: "text", text: withLinks }] : [];
+  }
+
+  /** Build TipTap image node — must use `src` (renderHTML reads e.src, not e.url). */
+  function pushImage(info) {
+    const src = info.src || info.url || info.previewUrl || "";
+    if (!src) return false;
+    content.push({
+      type: "image",
+      attrs: {
+        imgs: [
+          {
+            src: src,
+            fileId: info.fileId || "",
+            width: info.width || 800,
+            height: info.height || 600,
+            percent: info.percent != null ? info.percent : 100,
+            desc: info.alt || info.desc || "",
+          },
+        ],
+      },
+    });
+    return true;
   }
 
   while (i < lines.length) {
@@ -390,22 +359,10 @@ function xhsDraftMdToDoc(md, imagesMap, videoNotes) {
     // image only line: ![alt](id) or bare placeholder
     let im = trimmed.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
     if (im) {
-      const src = im[2].trim();
-      const info = imagesMap[src] || imagesMap[im[0]];
-      if (info && info.url) {
-        content.push({
-          type: "image",
-          attrs: {
-            imgs: [
-              {
-                url: info.url,
-                fileId: info.fileId || "",
-                width: info.width || 800,
-                height: info.height || 600,
-              },
-            ],
-          },
-        });
+      const key = im[2].trim();
+      const info = imagesMap[key] || imagesMap[im[0]];
+      if (info && pushImage(Object.assign({}, info, { alt: info.alt || im[1] || "" }))) {
+        // ok
       } else {
         pushParagraph(toInline(im[1] || "图片"));
       }

@@ -104,11 +104,15 @@ async function (args) {
         h = 600;
       }
     }
+    // TipTap image node requires `src` (NOT `url`) — renderHTML uses e.src
     const entry = {
+      src: up.previewUrl || up.url,
       url: up.previewUrl || up.url,
+      previewUrl: up.previewUrl || up.url,
       fileId: up.fileId,
       width: w,
       height: h,
+      percent: 100,
       alt: img.alt || "",
     };
     uploadedImages++;
@@ -127,10 +131,12 @@ async function (args) {
     const item = remotes[r];
     if (/xhscdn\.com|xiaohongshu\.com/i.test(item.url)) {
       imagesMap[item.full] = {
+        src: item.url,
         url: item.url,
         fileId: "",
         width: 800,
         height: 600,
+        percent: 100,
         alt: item.alt,
       };
       // rewrite to synthetic id for md parser
@@ -154,11 +160,14 @@ async function (args) {
       uploadedImages++;
       const rid = "__RIMG_" + r + "__";
       markdown = markdown.split(item.full).join("![](" + rid + ")");
+      const remoteSrc = up.previewUrl || up.url;
       imagesMap[rid] = {
-        url: up.previewUrl || up.url,
+        src: remoteSrc,
+        url: remoteSrc,
         fileId: up.fileId,
         width: up.width || 800,
         height: up.height || 600,
+        percent: 100,
         alt: item.alt,
       };
     } catch (e) {
