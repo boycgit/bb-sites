@@ -46,6 +46,7 @@ bb-browser site reddit/thread <url>        # 带参数运行
 | Reddit | `reddit/me`, `reddit/posts`, `reddit/thread`, `reddit/context` | 用户信息、发帖、讨论树、评论链 |
 | 微博 | `weibo/me`, `weibo/hot`, `weibo/feed`, `weibo/user`, `weibo/user_posts`, `weibo/post`, `weibo/comments` | 完整微博支持 — 资料、热搜、时间线、发帖、评论 |
 | 微博 (手机版) | `m_weibo/me`, `m_weibo/hot`, `m_weibo/feed`, `m_weibo/search`, `m_weibo/user`, `m_weibo/user_posts`, `m_weibo/comments` | 移动端优化版 — 基于稳定的 JSON 接口 |
+| 微信公众号 | `weixin/draft-create` | 将 Markdown（可含图片）上传到公众号草稿箱（需已登录 mp.weixin.qq.com） |
 | 虎扑 | `hupu/hot` | 虎扑步行街热帖 |
 
 ### 💻 技术开发
