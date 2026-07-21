@@ -27,15 +27,21 @@ async function __wxEnsureSession() {
   var s = __wxGetSession();
   if (s.token && window.wx && window.wx.commonData) return s;
 
-  if (!/mp\.weixin\.qq\.com/.test(location.host) || !s.token) {
-    location.href = "https://mp.weixin.qq.com/";
-    await new Promise(function (r) { setTimeout(r, 4000); });
+  // Wait for wx.commonData on current page (do NOT navigate — kills CDP evaluate)
+  if (/mp\.weixin\.qq\.com/.test(location.host)) {
+    for (var i = 0; i < 20; i++) {
+      await new Promise(function (r) { setTimeout(r, 250); });
+      s = __wxGetSession();
+      if (s.token && window.wx && window.wx.commonData) return s;
+      if (s.token) return s; // token from URL is enough for many APIs
+    }
   }
+
   s = __wxGetSession();
   if (!s.token) {
     return {
       error: "Not logged in",
-      hint: "Please log in to https://mp.weixin.qq.com in the bb-browser Chrome, then retry."
+      hint: "Please log in to https://mp.weixin.qq.com in the bb-browser Chrome, then retry. Avoid navigating during site run."
     };
   }
   return s;
@@ -265,3 +271,509 @@ async function __wxCreateDraft(session, opts) {
       + appmsgid + "&token=" + session.token + "&lang=zh_CN"
   };
 }
+
+/* ── type=15 视频素材（videomsg_edit / list_video）── */
+
+var __WX_VIDEO_EDIT_URL =
+  "https://mp.weixin.qq.com/cgi-bin/appmsg?t=media/videomsg_edit&action=video_edit&type=15&isNew=1&lang=zh_CN";
+var __WX_VIDEO_LIST_PATH =
+  "/cgi-bin/appmsg?begin=0&count=10&action=list_video&type=15&lang=zh_CN&f=json";
+
+function __wxSleep(ms) {
+  return new Promise(function (r) {
+    setTimeout(r, ms);
+  });
+}
+
+function __wxFindVueRoot(el, depth) {
+  depth = depth || 0;
+  if (!el || depth > 10) return null;
+  if (el.__vue__) return el.__vue__;
+  var kids = el.children || [];
+  for (var i = 0; i < kids.length; i++) {
+    var v = __wxFindVueRoot(kids[i], depth + 1);
+    if (v) return v;
+  }
+  return null;
+}
+
+/** Walk Vue tree for mp-video-edit-form (has form.applyori + cookPostData). */
+function __wxFindVideoEditForm() {
+  var root = __wxFindVueRoot(document.querySelector("#app") || document.body);
+  if (!root) return null;
+  var found = null;
+  function walk(vm, depth) {
+    if (!vm || depth > 14 || found) return;
+    if (
+      vm.form &&
+      typeof vm.form === "object" &&
+      Object.prototype.hasOwnProperty.call(vm.form, "applyori") &&
+      typeof vm.cookPostData === "function"
+    ) {
+      found = vm;
+      return;
+    }
+    var kids = vm.$children || [];
+    for (var i = 0; i < kids.length; i++) walk(kids[i], depth + 1);
+  }
+  walk(root, 0);
+  return found;
+}
+
+/**
+ * Must already be on videomsg_edit — do NOT location.href navigate here
+ * (full navigation aborts the CDP evaluate / adapter script).
+ */
+async function __wxEnsureVideoEditPage(session) {
+  var href = location.href || "";
+  var onEdit =
+    /mp\.weixin\.qq\.com/i.test(location.host) &&
+    (/videomsg_edit|action=video_edit/i.test(href) ||
+      (/type=15/i.test(href) && /video/i.test(href)));
+  if (!onEdit) {
+    return {
+      error: "Not on video edit page",
+      hint:
+        'Open: bb-browser open "' +
+        __WX_VIDEO_EDIT_URL +
+        (session && session.token ? "&token=" + session.token : "") +
+        '" then retry. Daemon should navigate here before mount.',
+      href: href,
+    };
+  }
+  // dismiss common intro dialogs
+  try {
+    var btns = document.querySelectorAll("button, a, .weui-desktop-btn");
+    for (var i = 0; i < btns.length; i++) {
+      var t = (btns[i].innerText || "").trim();
+      if (t === "知道了" || t === "我知道了") {
+        btns[i].click();
+        await __wxSleep(300);
+      }
+    }
+  } catch (e) { /* ignore */ }
+  return { ok: true };
+}
+
+/**
+ * If daemon mounted file via setFileInputFiles, upload should already be running.
+ * If only Blob was injected, create File and assign to input to start FtnUploader.
+ */
+async function __wxEnsureVideoFileMounted(args) {
+  // CDP setFileInputFiles may finish upload before adapter runs; input.files often empty after.
+  var vm0 = __wxFindVideoEditForm();
+  if (vm0 && vm0.form) {
+    var existingVid = vm0.form.vid;
+    if (typeof existingVid === "string" && /^wxv_/.test(existingVid)) {
+      return {
+        ok: true,
+        mode: "already-uploaded",
+        vid: existingVid,
+        videoStatus: vm0.videoStatus,
+      };
+    }
+    if (vm0.videoStatus === 1 || vm0.videoStatus === 2 || existingVid === "上传中") {
+      return {
+        ok: true,
+        mode: "uploading",
+        videoStatus: vm0.videoStatus,
+        vid: existingVid,
+      };
+    }
+  }
+
+  var input =
+    document.querySelector("input[type=file][name=vid]") ||
+    document.querySelector("input.weui-desktop-upload-input[type=file]") ||
+    document.querySelector('input[type=file][accept*="video"]');
+  if (!input) {
+    return { error: "Video file input not found", hint: "Open videomsg_edit type=15 page first" };
+  }
+  // Already has files from CDP setFileInputFiles?
+  if (input.files && input.files.length > 0) {
+    return { ok: true, mode: "fileInput", name: input.files[0].name, size: input.files[0].size };
+  }
+
+  // Daemon reported fileInput mount but files already consumed — wait for upload signals
+  if (args && args.__localVideoMountMode === "fileInput") {
+    for (var w = 0; w < 20; w++) {
+      await __wxSleep(500);
+      var vmW = __wxFindVideoEditForm();
+      if (vmW && vmW.form) {
+        if (typeof vmW.form.vid === "string" && /^wxv_/.test(vmW.form.vid)) {
+          return { ok: true, mode: "fileInput-late", vid: vmW.form.vid, videoStatus: vmW.videoStatus };
+        }
+        if (vmW.videoStatus === 1 || vmW.videoStatus === 2 || vmW.form.vid === "上传中") {
+          return { ok: true, mode: "fileInput-progress", videoStatus: vmW.videoStatus };
+        }
+      }
+      if (input.files && input.files.length > 0) {
+        return { ok: true, mode: "fileInput", name: input.files[0].name, size: input.files[0].size };
+      }
+    }
+  }
+
+  // Blob fallback
+  var blob = window.__bbLocalVideoBlob;
+  if (!blob) {
+    if (args && args.__localVideoReady === "1") {
+      return {
+        error: "Video mount reported ready but upload did not start",
+        hint:
+          "mountMode=" +
+          (args.__localVideoMountMode || "?") +
+          " videoStatus=" +
+          (vm0 ? vm0.videoStatus : "n/a") +
+          " vid=" +
+          (vm0 && vm0.form ? String(vm0.form.vid) : "n/a") +
+          ". Re-open videomsg_edit isNew=1 and retry.",
+      };
+    }
+    return {
+      error: "No video file mounted",
+      hint:
+        "CLI must pass --video <path>; daemon mounts via setFileInputFiles or injects Blob. " +
+        "mountMode=" +
+        (args && args.__localVideoMountMode),
+    };
+  }
+  var name = window.__bbLocalVideoBlobName || (args && args.__localVideoName) || "video.mp4";
+  var mime = window.__bbLocalVideoBlobMime || (args && args.__localVideoMime) || blob.type || "video/mp4";
+  var file;
+  try {
+    file = new File([blob], name, { type: mime, lastModified: Date.now() });
+  } catch (e) {
+    file = blob;
+    try {
+      file.name = name;
+    } catch (e2) { /* ignore */ }
+  }
+  try {
+    var dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  } catch (e) {
+    return { error: "Failed to assign File to input", hint: String(e) };
+  }
+  return { ok: true, mode: "blob", name: name, size: blob.size };
+}
+
+/**
+ * Poll Vue form until form.vid is wxv_* or timeout.
+ * videoStatus: 0 idle, 1 uploading, 3 success (approx from page JS)
+ */
+async function __wxWaitVideoUpload(timeoutMs) {
+  timeoutMs = timeoutMs || 100000;
+  var start = Date.now();
+  var last = { videoStatus: null, vid: null };
+  while (Date.now() - start < timeoutMs) {
+    var vm = __wxFindVideoEditForm();
+    if (vm && vm.form) {
+      var vid = vm.form.vid;
+      last.vid = vid;
+      last.videoStatus = vm.videoStatus;
+      // videoStatus: 0 idle, 1 uploading, 2 processing?, 3 saved/ok — accept any wxv_*
+      if (typeof vid === "string" && /^wxv_/.test(vid)) {
+        return { ok: true, vid: vid, videoStatus: vm.videoStatus, elapsedMs: Date.now() - start };
+      }
+      if (vid === "上传失败" || vid === "上传取消") {
+        return {
+          error: "Video upload failed: " + vid,
+          hint: vm.uploadErrorMsg || "Retry upload on videomsg_edit page",
+          videoStatus: vm.videoStatus,
+        };
+      }
+    }
+    await __wxSleep(800);
+  }
+  return {
+    error: "Video upload timeout",
+    hint:
+      "Waited " +
+      timeoutMs +
+      "ms. last vid=" +
+      String(last.vid) +
+      " status=" +
+      String(last.videoStatus) +
+      ". Network may be slow; retry or check FtnUploader.",
+    last: last,
+  };
+}
+
+function __wxCloseOriginDialogIfAny(vm) {
+  try {
+    if (vm.originDialog && vm.originDialog.isShow) {
+      if (typeof vm.onClickOriginDialogOk === "function") vm.onClickOriginDialogOk();
+      else vm.originDialog.isShow = false;
+    }
+    if (typeof vm.hasOriAccepted !== "undefined") vm.hasOriAccepted = true;
+  } catch (e) { /* ignore */ }
+  // click OK on any visible desktop dialog about 原创
+  try {
+    var dialogs = document.querySelectorAll(".weui-desktop-dialog");
+    for (var i = 0; i < dialogs.length; i++) {
+      var d = dialogs[i];
+      var style = window.getComputedStyle(d);
+      if (style.display === "none" || style.visibility === "hidden") continue;
+      var text = d.innerText || "";
+      if (/原创|声明/.test(text)) {
+        var ok = d.querySelector(".weui-desktop-btn_primary");
+        if (ok) ok.click();
+      }
+    }
+  } catch (e2) { /* ignore */ }
+}
+
+/**
+ * Fill form fields: title, digest, tags, applyori=1, agree=1.
+ */
+async function __wxFillVideoForm(vm, opts) {
+  opts = opts || {};
+  var title = String(opts.title || "").slice(0, 64);
+  var desc = String(opts.desc || "").slice(0, 300);
+  var tags = Array.isArray(opts.tags) ? opts.tags.map(String).slice(0, 5) : [];
+
+  vm.form.title = title;
+  vm.form.digest = desc;
+  vm.form.agree = 1;
+  vm.form.applyori = 1;
+  if (tags.length) {
+    vm.form.tags = tags.slice();
+    vm.form.hasAddTag = true;
+    try {
+      if (vm.videoTagsDialog) {
+        // Prefer objects with title if UI expects them
+        vm.videoTagsDialog.tags = tags.map(function (t) {
+          return typeof t === "string" ? { title: t, id: t } : t;
+        });
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  // Reflect title into visible input
+  try {
+    var titleInput = document.querySelector('input[name="title"].weui-desktop-form__input');
+    if (titleInput) {
+      titleInput.value = title;
+      titleInput.dispatchEvent(new Event("input", { bubbles: true }));
+      titleInput.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  } catch (e) { /* ignore */ }
+
+  // Check "我已阅读" checkbox if present
+  try {
+    var boxes = document.querySelectorAll('input.weui-desktop-form__checkbox[type=checkbox]');
+    for (var i = 0; i < boxes.length; i++) {
+      var lab = boxes[i].closest("label") || boxes[i].parentElement;
+      var txt = (lab && lab.innerText) || "";
+      if (/我已阅读|上传服务规则|服务规则/.test(txt) && !boxes[i].checked) {
+        boxes[i].click();
+      }
+    }
+  } catch (e2) { /* ignore */ }
+
+  // 声明原创 switch/checkbox
+  try {
+    if (typeof vm.onClickOri === "function" && !vm.form.applyori) {
+      vm.onClickOri();
+      await __wxSleep(400);
+    }
+    vm.form.applyori = 1;
+    __wxCloseOriginDialogIfAny(vm);
+  } catch (e3) { /* ignore */ }
+
+  await __wxSleep(300);
+  __wxCloseOriginDialogIfAny(vm);
+  return { title: title, desc: desc, tags: tags };
+}
+
+/**
+ * Save draft via operate_mp_video API only.
+ * Do NOT call Vue asyncPostVideo — it navigates to list_video and aborts CDP evaluate.
+ */
+async function __wxSaveVideoDraft(vm, session, opts) {
+  opts = opts || {};
+  var title = (opts.title || (vm && vm.form && vm.form.title) || "").toString().trim();
+  var vid = (vm && vm.form && vm.form.vid) || opts.vid;
+  if (!vid || !/^wxv_/.test(String(vid))) {
+    return { error: "Missing vid after upload", hint: "vid=" + String(vid) };
+  }
+
+  try {
+    if (vm) {
+      __wxCloseOriginDialogIfAny(vm);
+      vm.form.agree = 1;
+      vm.form.applyori = 1;
+      vm.form.title = title;
+      if (opts.desc) vm.form.digest = opts.desc;
+      if (typeof vm.cookPostData === "function") {
+        try {
+          vm.cookPostData();
+        } catch (e) { /* ignore */ }
+      }
+      if (vm.postData) {
+        vm.postData.title = title;
+        vm.postData.vid = vid;
+        vm.postData.applyori = 1;
+        vm.postData.save = 1;
+        vm.postData.remind_ori = 1;
+        if (opts.desc) {
+          vm.postData.digest = opts.desc;
+          vm.postData.video_desc = opts.desc;
+        }
+      }
+    }
+  } catch (e) { /* ignore fill errors; API body is authoritative */ }
+
+  var api = await __wxPostOperateMpVideo(session, vm, opts);
+  if (!api.error) return api;
+
+  // One retry after short wait (cover may still be generating)
+  await __wxSleep(2000);
+  api = await __wxPostOperateMpVideo(session, vm, opts);
+  return api;
+}
+
+async function __wxPostOperateMpVideo(session, vm, opts) {
+  opts = opts || {};
+  var title = (opts.title || (vm && vm.form && vm.form.title) || "").toString().trim();
+  var vid = (vm && vm.form && vm.form.vid) || opts.vid;
+  var post = (vm && vm.postData) || {};
+  var body = {
+    type: 15,
+    title: title,
+    vid: vid,
+    applyori: 1,
+    save: 1,
+    remind_ori: 1,
+    video_is_new: 1,
+    share_page: 1,
+    send_time: 0,
+    cardlimit: 1,
+    recommend: "",
+    can_reward: 0,
+    need_open_comment: 0,
+    only_fans_can_comment: 0,
+    only_fans_days_can_comment: 0,
+    reply_flag: 0,
+    danmu_pub_type: post.danmu_pub_type != null ? post.danmu_pub_type : 1,
+    cover_url: post.cover_url || "",
+    cover_url_16_9: post.cover_url_16_9 || "",
+    cover_url_1_1: post.cover_url_1_1 || "",
+    cover_url_back: post.cover_url_back || "",
+    crop_coordinate: post.crop_coordinate || "",
+    text_coordinate: post.text_coordinate || "",
+    appmsgid: post.appmsgid || "",
+    digest: opts.desc || post.digest || "",
+    video_desc: opts.desc || post.video_desc || post.digest || "",
+  };
+  if (opts.tags && opts.tags.length) {
+    body.appmsg_album_info0 = JSON.stringify({
+      appmsg_album_infos: opts.tags.map(function (t) {
+        return { title: t, id: t };
+      }),
+    });
+  }
+
+  // wx ajax usually form-urlencoded; try both form and json-like form
+  function encode(obj) {
+    return Object.keys(obj)
+      .map(function (k) {
+        var v = obj[k];
+        if (v == null) v = "";
+        return encodeURIComponent(k) + "=" + encodeURIComponent(String(v));
+      })
+      .join("&");
+  }
+
+  var url =
+    "https://mp.weixin.qq.com/cgi-bin/video?action=operate_mp_video&token=" +
+    encodeURIComponent(session.token) +
+    "&lang=zh_CN&f=json&ajax=1";
+  var resp = await fetch(url, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+      "X-Requested-With": "XMLHttpRequest",
+    },
+    body: encode(body),
+  });
+  var text = await resp.text();
+  var data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    return { error: "operate_mp_video parse error", hint: text.slice(0, 200) };
+  }
+  var ret = data.base_resp ? data.base_resp.ret : data.ret;
+  if (String(ret) !== "0") {
+    return {
+      error: (data.base_resp && data.base_resp.err_msg) || "ret " + ret,
+      hint: text.slice(0, 200),
+      raw: data,
+    };
+  }
+  var appmsgid = data.appMsgId || data.appmsgid || data.app_msg_id;
+  if (!appmsgid) {
+    await __wxSleep(1500);
+    var hit = await __wxFindVideoByTitleOrVid(session, title, vid);
+    if (hit) appmsgid = hit.appmsgid || hit.app_id;
+  }
+  return {
+    appmsgid: appmsgid,
+    vid: vid,
+    title: title,
+    via: "api",
+    data_seq: data.data_seq,
+  };
+}
+
+async function __wxListVideos(session, begin, count) {
+  begin = begin || 0;
+  count = count || 10;
+  var url =
+    "https://mp.weixin.qq.com/cgi-bin/appmsg?action=list_video&begin=" +
+    begin +
+    "&count=" +
+    count +
+    "&type=15&token=" +
+    encodeURIComponent(session.token) +
+    "&lang=zh_CN&f=json&ajax=1";
+  var resp = await fetch(url, { credentials: "include" });
+  var data = await resp.json();
+  if (!data || !data.base_resp || data.base_resp.ret !== 0) {
+    return {
+      error: "list_video failed",
+      hint: JSON.stringify((data && data.base_resp) || data).slice(0, 160),
+    };
+  }
+  var items = (data.app_msg_info && data.app_msg_info.item) || [];
+  return { items: items, raw: data };
+}
+
+async function __wxFindVideoByTitleOrVid(session, title, vid) {
+  var list = await __wxListVideos(session, 0, 10);
+  if (list.error) return null;
+  var items = list.items || [];
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    var t = it.title || "";
+    var content = it.content || "";
+    var multi = (it.multi_item && it.multi_item[0]) || {};
+    var mvid = multi.content || content;
+    if ((title && t === title) || (vid && (mvid === vid || content === vid))) {
+      return {
+        appmsgid: it.app_id || it.app_msg_id,
+        app_id: it.app_id,
+        title: t,
+        vid: mvid || vid,
+        update_time: it.update_time,
+      };
+    }
+  }
+  return null;
+}
+
