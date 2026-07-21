@@ -101,7 +101,7 @@ bb-browser site reddit/thread <url>        # 带参数运行
 | 平台 | 命令 | 说明 |
 |------|------|------|
 | 维基百科 | `wikipedia/search`, `wikipedia/summary` | 搜索、页面摘要 |
-| 知乎 | `zhihu/me`, `zhihu/hot`, `zhihu/question`, `zhihu/search` | 用户信息、热榜、问答、搜索 |
+| 知乎 | `zhihu/me`, `zhihu/hot`, `zhihu/question`, `zhihu/search`, `zhihu/draft-create` | 用户信息、热榜、问答、搜索；Markdown 整篇上传专栏草稿（含图） |
 | Open Library | `openlibrary/search` | 图书搜索 |
 
 ### 🌐 生活服务

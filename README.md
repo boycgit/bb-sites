@@ -101,7 +101,7 @@ bb-browser site reddit/thread <url>        # run with args
 | Platform | Commands | Description |
 |----------|----------|-------------|
 | Wikipedia | `wikipedia/search`, `wikipedia/summary` | Search & page summaries |
-| Zhihu | `zhihu/me`, `zhihu/hot`, `zhihu/question`, `zhihu/search` | 知乎 — user info, trending, Q&A, search |
+| Zhihu | `zhihu/me`, `zhihu/hot`, `zhihu/question`, `zhihu/search`, `zhihu/draft-create` | 知乎 — user info, trending, Q&A, search; Markdown → column article draft (with images) |
 | Open Library | `openlibrary/search` | Book search |
 
 ### 🌐 Lifestyle & Travel
