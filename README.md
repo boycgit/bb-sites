@@ -47,6 +47,7 @@ bb-browser site reddit/thread <url>        # run with args
 | Weibo | `weibo/me`, `weibo/hot`, `weibo/feed`, `weibo/user`, `weibo/user_posts`, `weibo/post`, `weibo/comments` | Full Weibo (微博) support — profile, trending, timeline, posts, comments |
 | Mobile Weibo | `m_weibo/me`, `m_weibo/hot`, `m_weibo/feed`, `m_weibo/search`, `m_weibo/user`, `m_weibo/user_posts`, `m_weibo/comments` | Mobile-optimized Weibo (微博手机版) — resilient JSON APIs |
 | WeChat Official Account | `weixin/draft-create`, `weixin/video-draft-create` | Markdown → MP article draft; local video → type=15 video material draft (logged-in mp.weixin.qq.com) |
+| WeChat Channels (视频号助手) | `channels/draft-create` | Local video → channels.weixin.qq.com draft box (not publish) |
 | Hupu | `hupu/hot` | Hupu (虎扑) hot posts |
 
 ### 💻 Tech & Dev
