@@ -48,6 +48,7 @@ bb-browser site reddit/thread <url>        # 带参数运行
 | 微博 (手机版) | `m_weibo/me`, `m_weibo/hot`, `m_weibo/feed`, `m_weibo/search`, `m_weibo/user`, `m_weibo/user_posts`, `m_weibo/comments` | 移动端优化版 — 基于稳定的 JSON 接口 |
 | 微信公众号 | `weixin/draft-create`, `weixin/video-draft-create` | Markdown 图文草稿；本地视频 → 素材库 type=15 视频草稿（需已登录 mp.weixin.qq.com） |
 | 微信视频号助手 | `channels/draft-create` | 本地视频 → channels.weixin.qq.com 草稿箱（不自动发表） |
+| 抖音创作者中心 | `douyin/draft-create` | 本地视频 → creator.douyin.com 未发布单草稿（不自动发布） |
 | 虎扑 | `hupu/hot` | 虎扑步行街热帖 |
 
 ### 💻 技术开发
@@ -69,7 +70,7 @@ bb-browser site reddit/thread <url>        # 带参数运行
 
 | 平台 | 命令 | 说明 |
 |------|------|------|
-| YouTube | `youtube/search`, `youtube/video`, `youtube/comments`, `youtube/channel`, `youtube/feed`, `youtube/transcript` | 搜索、视频详情、评论、频道、Feed、字幕文稿 |
+| YouTube | `youtube/search`, `youtube/video`, `youtube/comments`, `youtube/channel`, `youtube/feed`, `youtube/transcript`, `youtube/draft-create` | 搜索、视频详情、评论、频道、Feed、字幕；Studio 视频草稿上传 |
 | B站 | `bilibili/me`, `bilibili/popular`, `bilibili/ranking`, `bilibili/search`, `bilibili/video`, `bilibili/comments`, `bilibili/feed`, `bilibili/history`, `bilibili/trending`, `bilibili/draft-create` | 完整 B站 支持 + 视频草稿上传 |
 | IMDb | `imdb/search` | IMDb 电影搜索 |
 | Genius | `genius/search` | 歌曲/歌词搜索 |

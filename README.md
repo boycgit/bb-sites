@@ -48,6 +48,7 @@ bb-browser site reddit/thread <url>        # run with args
 | Mobile Weibo | `m_weibo/me`, `m_weibo/hot`, `m_weibo/feed`, `m_weibo/search`, `m_weibo/user`, `m_weibo/user_posts`, `m_weibo/comments` | Mobile-optimized Weibo (微博手机版) — resilient JSON APIs |
 | WeChat Official Account | `weixin/draft-create`, `weixin/video-draft-create` | Markdown → MP article draft; local video → type=15 video material draft (logged-in mp.weixin.qq.com) |
 | WeChat Channels (视频号助手) | `channels/draft-create` | Local video → channels.weixin.qq.com draft box (not publish) |
+| Douyin (抖音创作者中心) | `douyin/draft-create` | Local video → creator.douyin.com unpublished single draft |
 | Hupu | `hupu/hot` | Hupu (虎扑) hot posts |
 
 ### 💻 Tech & Dev
@@ -69,7 +70,7 @@ bb-browser site reddit/thread <url>        # run with args
 
 | Platform | Commands | Description |
 |----------|----------|-------------|
-| YouTube | `youtube/search`, `youtube/video`, `youtube/comments`, `youtube/channel`, `youtube/feed`, `youtube/transcript` | Search, video details, comments, channels, feed, transcripts |
+| YouTube | `youtube/search`, `youtube/video`, `youtube/comments`, `youtube/channel`, `youtube/feed`, `youtube/transcript`, `youtube/draft-create` | Search, video details, comments, channels, feed, transcripts; Studio video draft upload |
 | Bilibili | `bilibili/me`, `bilibili/popular`, `bilibili/ranking`, `bilibili/search`, `bilibili/video`, `bilibili/comments`, `bilibili/feed`, `bilibili/history`, `bilibili/trending`, `bilibili/draft-create` | Full B站 support + video draft upload |
 | IMDb | `imdb/search` | IMDb movie search |
 | Genius | `genius/search` | Song/lyrics search |
