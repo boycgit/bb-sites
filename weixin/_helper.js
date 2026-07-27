@@ -233,12 +233,17 @@ async function __wxCreateDraft(session, opts) {
   map.share_imageinfo0 = JSON.stringify({ list: [] });
   map.copyright_img_list0 = "";
   map.compose_info0 = JSON.stringify({ list: [] });
-  map.copyright_type0 = "0";
-  map.need_open_comment0 = "0";
+  map.copyright_type0 = opts.original ? "1" : "0";
+  map.need_open_comment0 = opts.original ? "1" : "0";
   map.only_fans_can_comment0 = "0";
+  map.claim_source_type0 = "1"; // 个人观点，仅供参考
   try {
     var reqObj = JSON.parse(map.req || "{}");
     reqObj.appmsg_id = 0;
+    // 创作来源: 个人观点，仅供参考 (source_type=1)
+    if (reqObj.idx_infos && reqObj.idx_infos[0]) {
+      reqObj.idx_infos[0].claim_source = { source_type: 1 };
+    }
     map.req = JSON.stringify(reqObj);
   } catch (e) { /* ignore */ }
 

@@ -1,17 +1,18 @@
 /* @meta
 {
   "name": "zhihu/draft-create",
-  "description": "将 Markdown 整篇上传为知乎专栏草稿（含图片；视频暂以链接/提示处理）",
+  "description": "将 Markdown 整篇上传为知乎专栏草稿（图片与本地视频均自动上传并内嵌）",
   "domain": "zhuanlan.zhihu.com",
   "args": {
     "markdown": { "required": true, "description": "Markdown 正文或本地路径（CLI 展开）" },
-    "title": { "required": false, "description": "标题，默认取 md 一级标题" },
-    "draftId": { "required": false, "description": "已有草稿 id，传入则更新" },
-    "images": { "required": false, "description": "JSON 本地图 [{id,name,mime,base64,alt,original}]" }
+    "config": { "required": false, "description": "JSON 配置字符串或本地 JSON 文件路径，包含 title/draftId 字段" },
+    "configFile": { "required": false, "description": "本地 JSON 配置文件路径（与 --config 二选一）" },
+    "images": { "required": false, "description": "JSON 本地图 [{id,name,mime,base64,alt,original}]（CLI 预处理）" },
+    "__localVideos": { "required": false, "description": "JSON 本地视频元信息 [{id,original,globalName,name,mime,size,md5}]（daemon 注入 Blob 后写入）" }
   },
   "capabilities": ["network", "write"],
   "readOnly": false,
-  "example": "bb-browser site zhihu/draft-create ./draft.md --json"
+  "example": "bb-browser site zhihu/draft-create ./draft.md --configFile ./draft-publish.config.json --json"
 }
 */
 async function (args) {
@@ -95,18 +96,78 @@ async function (args) {
     return full;
   });
 
-  // Videos: local relative paths cannot play on Zhihu without upload API
-  // Convert [text](./video.mp4) and bare ../xxx.mp4 to a note paragraph
+  // ---- 视频：daemon 已把本地视频注入成 window.__bbLocalVideo<n> Blob ----
+  // 逐个走知乎视频上传链路，换成正文可播放的 video-link 节点
+  let localVideos = [];
+  try {
+    localVideos = args.__localVideos ? JSON.parse(args.__localVideos) : [];
+  } catch {
+    return { error: "Invalid __localVideos JSON" };
+  }
+
+  const videoMap = {};
   let uploadedVideos = 0;
-  markdown = markdown.replace(/\[([^\]]*)\]\(([^)]+\.(mp4|mov|webm)[^)]*)\)/gi, function (full, text, src) {
+  for (let i = 0; i < localVideos.length; i++) {
+    const item = localVideos[i] || {};
+    const label = item.original || item.id || item.name || "video";
+    const blob = item.globalName ? window[item.globalName] : null;
+    if (!blob) {
+      warnings.push(label + ": local video blob missing (daemon inject failed)");
+      continue;
+    }
+    const up = await zhihuUploadVideo({
+      blob: blob,
+      mime: item.mime,
+      md5: item.md5,
+      name: item.name,
+    });
+    if (up.error) {
+      warnings.push(label + ": " + up.error + (up.hint ? " — " + up.hint : ""));
+      continue;
+    }
+    uploadedVideos++;
+    const html = zhihuVideoHtml(up);
+    if (item.id) videoMap[item.id] = html;
+    if (item.original) videoMap[item.original] = html;
+    if (!up.poster) {
+      warnings.push(label + ": 视频已上传，封面仍在转码，草稿里缩略图可能暂时为空");
+    }
+    try {
+      delete window[item.globalName];
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // CLI 因体积/数量上限跳过的视频
+  try {
+    const skipped = args.__skippedVideos ? JSON.parse(args.__skippedVideos) : [];
+    for (let s = 0; s < skipped.length; s++) {
+      warnings.push("video skipped (over size/count limit): " + skipped[s]);
+    }
+  } catch {
+    /* ignore */
+  }
+
+  function resolveVideoHtml(src) {
+    if (!src) return null;
+    if (videoMap[src]) return videoMap[src];
+    for (const k of Object.keys(videoMap)) {
+      if (!k) continue;
+      if (src === k || src.endsWith(k) || k.endsWith(src)) return videoMap[k];
+    }
+    return null;
+  }
+
+  // [文案](路径|占位) —— 命中已上传视频则替换成 video-link，远程链接保留为普通链接
+  markdown = markdown.replace(/\[([^\]]*)\]\(([^)\s]+)\)/g, function (full, text, src) {
+    const html = resolveVideoHtml(src);
+    if (html) return "\n" + html + "\n";
+    if (!/__VIDEO_\d+__|\.(mp4|mov|webm|m4v)(\?|#|$)/i.test(src)) return full;
     if (/^https?:\/\//i.test(src)) {
       return '<p><a href="' + src + '">' + (text || "视频链接") + "</a></p>";
     }
-    warnings.push(
-      "video not uploaded (local path): " +
-        src +
-        " — Zhihu video upload needs platform video API; left as text note"
-    );
+    warnings.push("video not uploaded (local path): " + src);
     return (
       "<p><b>【视频占位】</b>" +
       (text || "演示视频") +
@@ -115,15 +176,20 @@ async function (args) {
       "，请在知乎编辑器中手动插入视频）</p>"
     );
   });
-  markdown = markdown.replace(/<video[^>]+src=["']([^"']+)["'][^>]*>.*?<\/video>/gi, function (full, src) {
-    if (/^https?:\/\//i.test(src)) {
-      return '<p><a href="' + src + '">视频</a></p>';
+
+  // <video src="..."></video>
+  markdown = markdown.replace(
+    /<video[^>]*\ssrc=["']([^"']+)["'][^>]*>(?:\s*<\/video>)?/gi,
+    function (full, src) {
+      const html = resolveVideoHtml(src);
+      if (html) return "\n" + html + "\n";
+      if (/^https?:\/\//i.test(src)) {
+        return '<p><a href="' + src + '">视频</a></p>';
+      }
+      warnings.push("video tag not uploaded: " + src);
+      return "<p><b>【视频占位】</b>请在知乎编辑器中手动插入视频（" + src + "）</p>";
     }
-    warnings.push("video tag not uploaded: " + src);
-    return (
-      "<p><b>【视频占位】</b>请在知乎编辑器中手动插入视频（" + src + "）</p>"
-    );
-  });
+  );
 
   const content = zhihuMdToHtml(markdown);
   if (!content || content.length < 10) {

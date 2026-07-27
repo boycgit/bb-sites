@@ -32,12 +32,23 @@ bb-browser site zhihu/draft-create ./draft.md --json
 
 ### 媒体
 
-- 图片：`![说明](./a.png)` 自动上传
-- 本地视频：当前写入占位说明，需在编辑器手动插视频（见 `warnings`）
+- 图片：`![说明](./a.png)` 自动上传到 `zhimg.com`
+- 本地视频：`<video controls src="./clip.mp4"></video>` 或 `[文案](./clip.mp4)` 自动上传到知乎视频库，
+  正文替换为可播放的 `video-link` 节点（含首帧封面）
+- 远程 `https://` 图会尝试转存；远程视频链接保留为普通超链接
+
+视频上传链路（逆向自专栏编辑器）：
+
+1. `POST lens.zhihu.com/api/v5/videos`，体 `{file_md5, source:"article"}` → `video_id` + OSS STS 令牌
+2. 阿里云 OSS 分片上传（`upload-oss.vzuu.com` / `zhihu-video-input` / cname），复用页面 `window.OSS`
+3. `PUT /api/v4/videos/{id}/uploading_status` 上报状态
+4. 轮询 `GET /api/v4/videos/{id}/default_cover` 取首帧后 `PUT` 回写封面
+
+限制：单个 ≤120MB、单篇合计 ≤300MB、最多 6 个（CLI 侧裁剪，超限写入 `warnings`）。
 
 ### 文件
 
 | 文件 | 作用 |
 |------|------|
 | `draft-create.js` | 主命令 |
-| `_helper.js` | 登录、传图、建/改草稿、MD→HTML |
+| `_helper.js` | 登录、传图、传视频、建/改草稿、MD→HTML |

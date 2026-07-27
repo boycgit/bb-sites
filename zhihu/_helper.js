@@ -216,6 +216,229 @@ async function zhihuVerifyDraft(draftId) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// 视频上传（专栏正文内嵌视频）
+//
+// 逆向自 zhuanlan.zhihu.com 编辑器（2026-07，heifetz column bundle）：
+//   ① POST  https://lens.zhihu.com/api/v5/videos
+//      headers: Content-Type/json, X-Upload-Content-Type, X-Upload-Content-Length
+//      body:    { file_md5: <hex>, source: "article" }
+//      resp:    { upload_vendor: { upload_token: {access_id, access_key, access_token},
+//                                  endpoint, vendor_code },
+//                 upload_file:   { video_id, object_key, state } }
+//      state 语义：1=instant(秒传，服务端已有该 md5) / 2=checkpoint / 3=unprocessed(需上传)
+//   ② 阿里云 OSS 分片上传：endpoint=upload-oss.vzuu.com，bucket=zhihu-video-input，cname=true
+//      直接复用页面里的 ali-oss SDK（编辑器同款 6.8.0），避免自行实现 STS 签名
+//   ③ PUT   /api/v4/videos/{id}/uploading_status
+//      body:  { object_key, upload_id, video_source:"origin", upload_event }
+//   ④ GET   /api/v4/videos/{id}/default_cover 轮询首帧封面，拿到后 PUT 回写
+//   ⑤ 正文节点：<a class="video-link" href="https://www.zhihu.com/video/{id}"
+//                 data-poster="..." data-lens-id="{id}" data-video-playable="true"></a>
+//
+// 注意：lens.zhihu.com 的 CORS 预检只放行固定请求头白名单，
+// 不要给这些请求加 X-Xsrftoken 之类的自定义头，否则预检直接失败。
+const ZHIHU_LENS_API = "https://lens.zhihu.com";
+const ZHIHU_OSS_SDK = "https://unpkg.zhimg.com/ali-oss@6.8.0/dist/aliyun-oss-sdk.min.js";
+const ZHIHU_OSS_ENDPOINT = "https://upload-oss.vzuu.com";
+const ZHIHU_OSS_BUCKET = "zhihu-video-input";
+const ZHIHU_OSS_PART_SIZE = 10 * 1024 * 1024;
+const ZHIHU_COVER_TIMEOUT_MS = 25000;
+
+/** 按需加载 ali-oss SDK（编辑器本身也是懒加载，纯浏览页面上没有 window.OSS）。 */
+function zhihuEnsureOssSdk() {
+  if (typeof window.OSS === "function") return Promise.resolve(true);
+  if (window.__bbZhihuOssSdkPromise) return window.__bbZhihuOssSdkPromise;
+  window.__bbZhihuOssSdkPromise = new Promise(function (resolve, reject) {
+    const script = document.createElement("script");
+    script.crossOrigin = "";
+    script.src = ZHIHU_OSS_SDK;
+    script.onload = function () {
+      typeof window.OSS === "function"
+        ? resolve(true)
+        : reject(new Error("ali-oss SDK loaded but window.OSS missing"));
+    };
+    script.onerror = function () {
+      reject(new Error("Failed to load ali-oss SDK: " + ZHIHU_OSS_SDK));
+    };
+    (document.body || document.head).appendChild(script);
+  });
+  return window.__bbZhihuOssSdkPromise;
+}
+
+async function zhihuLensJson(path, init) {
+  const resp = await fetch(ZHIHU_LENS_API + path,
+    Object.assign({ credentials: "include" }, init || {}));
+  const text = await resp.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = null;
+  }
+  return { ok: resp.ok, status: resp.status, data: data, text: text };
+}
+
+/** 上报上传进度事件；纯埋点/状态机，失败不影响主流程。 */
+async function zhihuReportUploadStatus(videoId, objectKey, uploadId, event) {
+  try {
+    await zhihuLensJson("/api/v4/videos/" + videoId + "/uploading_status", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        object_key: objectKey,
+        upload_id: uploadId || "",
+        video_source: "origin",
+        upload_event: event,
+      }),
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 轮询首帧封面；转码未完成时返回空，超时后放弃（正文可无 poster）。 */
+async function zhihuWaitVideoCover(videoId) {
+  const deadline = Date.now() + ZHIHU_COVER_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const res = await zhihuLensJson("/api/v4/videos/" + videoId + "/default_cover", {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+    // GET 返回 default_cover_url；PUT 回写时字段才叫 cover_url
+    const url =
+      res.data && (res.data.default_cover_url || res.data.cover_url || res.data.url);
+    if (url) return String(url);
+    await new Promise(function (r) {
+      setTimeout(r, 1500);
+    });
+  }
+  return "";
+}
+
+/**
+ * 上传单个视频到知乎视频库。
+ * opts: { blob, mime, md5, name }
+ * 成功返回 { videoId, poster, name, size, instant }，失败返回 { error, hint }。
+ */
+async function zhihuUploadVideo(opts) {
+  const blob = opts && opts.blob;
+  if (!blob || typeof blob.size !== "number" || blob.size <= 0) {
+    return { error: "No video data", hint: "daemon 未成功注入本地视频 Blob" };
+  }
+  if (!opts.md5) {
+    return { error: "Missing video md5", hint: "daemon 应随 Blob 一起提供 md5" };
+  }
+  const mime = opts.mime || blob.type || "video/mp4";
+  const name = opts.name || "video.mp4";
+
+  const created = await zhihuLensJson("/api/v5/videos", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "X-Upload-Content-Type": mime,
+      "X-Upload-Content-Length": String(blob.size),
+    },
+    body: JSON.stringify({ file_md5: String(opts.md5).toLowerCase(), source: "article" }),
+  });
+  const uploadFile = created.data && created.data.upload_file;
+  if (!created.ok || !uploadFile || !uploadFile.video_id) {
+    return {
+      error: "Create video failed HTTP " + created.status,
+      hint: (created.text || "").slice(0, 200) + " — 确认已登录知乎且账号可发视频",
+    };
+  }
+  const videoId = String(uploadFile.video_id);
+  const objectKey = String(uploadFile.object_key || "");
+  const instant = Number(uploadFile.state) === 1;
+
+  if (!instant) {
+    const token =
+      (created.data.upload_vendor && created.data.upload_vendor.upload_token) || null;
+    if (!token || !token.access_id) {
+      return { error: "Missing OSS upload token", hint: (created.text || "").slice(0, 200) };
+    }
+    try {
+      await zhihuEnsureOssSdk();
+    } catch (e) {
+      return { error: "ali-oss SDK unavailable", hint: String(e) };
+    }
+
+    const endpoint =
+      (created.data.upload_vendor && created.data.upload_vendor.endpoint) || ZHIHU_OSS_ENDPOINT;
+    const client = new window.OSS({
+      endpoint: /^https?:\/\//i.test(endpoint) ? endpoint : "https://" + endpoint,
+      bucket: ZHIHU_OSS_BUCKET,
+      cname: true,
+      secure: true,
+      accessKeyId: token.access_id,
+      accessKeySecret: token.access_key,
+      stsToken: token.access_token,
+    });
+
+    let uploadId = "";
+    let started = false;
+    const file = new File([blob], name, { type: mime });
+    try {
+      await client.multipartUpload(objectKey, file, {
+        mime: mime,
+        parallel: 3,
+        partSize: ZHIHU_OSS_PART_SIZE,
+        progress: function (_percent, checkpoint) {
+          if (checkpoint && checkpoint.uploadId) {
+            uploadId = checkpoint.uploadId;
+            if (!started) {
+              started = true;
+              zhihuReportUploadStatus(videoId, objectKey, uploadId, "UPLOADING_START");
+            }
+          }
+        },
+      });
+    } catch (e) {
+      const msg = (e && (e.message || e.code)) || String(e);
+      return { error: "OSS upload failed: " + msg, hint: "视频过大或 STS 令牌过期，可重试" };
+    }
+    await zhihuReportUploadStatus(videoId, objectKey, uploadId, "UPLOADING_SUCCESS");
+  }
+
+  let poster = await zhihuWaitVideoCover(videoId);
+  if (poster) {
+    // 与编辑器一致：把首帧回写为视频封面，正文缩略图才不会空白
+    await zhihuLensJson("/api/v4/videos/" + videoId + "/default_cover", {
+      method: "PUT",
+      body: JSON.stringify({ cover_url: poster }),
+    }).catch(function () {
+      /* ignore */
+    });
+  }
+
+  return {
+    videoId: videoId,
+    poster: poster,
+    name: name,
+    size: blob.size,
+    instant: instant,
+  };
+}
+
+/** 生成专栏正文的视频节点（与编辑器插入的 DOM 结构一致）。 */
+function zhihuVideoHtml(video) {
+  const id = String((video && video.videoId) || "");
+  const poster = String((video && video.poster) || "").replace(/"/g, "&quot;");
+  const name = String((video && video.title) || "").replace(/"/g, "&quot;");
+  return (
+    '<a class="video-link" href="https://www.zhihu.com/video/' +
+    id +
+    '" data-src="" data-name="' +
+    name +
+    '" data-poster="' +
+    poster +
+    '" data-video-id="" data-lens-id="' +
+    id +
+    '" data-video-playable="true"></a>'
+  );
+}
+
 /** Lightweight Markdown → Zhihu-friendly HTML */
 function zhihuMdToHtml(md) {
   if (!md) return "";

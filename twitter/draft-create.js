@@ -5,17 +5,14 @@
   "domain": "x.com",
   "args": {
     "markdown": { "required": false, "description": "Markdown 正文或本地路径（CLI 会展开）" },
-    "title": { "required": false, "description": "标题；默认取 md 一级标题" },
-    "digest": { "required": false, "description": "摘要；默认取 md 首段" },
-    "link": { "required": false, "description": "全文链接（强烈建议）" },
-    "images": { "required": false, "description": "JSON 本地图 [{id,name,mime,base64,alt}]；alt 来自 md ![alt](path)" },
-    "videos": { "required": false, "description": "JSON 视频 [{name,mime,base64}|{url}]" },
-    "maxLength": { "required": false, "description": "文案最大长度，默认 280" },
-    "prefer": { "required": false, "description": "媒体优先：image（默认）或 video" }
+    "config": { "required": false, "description": "JSON 配置字符串或本地 JSON 文件路径，包含 title/digest/link/maxLength/prefer/images/videos 字段" },
+    "configFile": { "required": false, "description": "本地 JSON 配置文件路径（与 --config 二选一）" },
+    "images": { "required": false, "description": "JSON 本地图 [{id,name,mime,base64,alt}]（CLI 预处理）；alt 来自 md ![alt](path)" },
+    "videos": { "required": false, "description": "JSON 视频 [{name,mime,base64}|{url}]（CLI 预处理）" }
   },
   "capabilities": ["network", "write"],
   "readOnly": false,
-  "example": "bb-browser site twitter/draft-create ./draft.md --link https://example.com/post --json"
+  "example": "bb-browser site twitter/draft-create ./draft.md --configFile ./draft-publish.config.json --json"
 }
 */
 async function (args) {

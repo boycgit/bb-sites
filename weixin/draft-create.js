@@ -5,9 +5,11 @@
   "domain": "mp.weixin.qq.com",
   "args": {
     "markdown": { "required": true, "description": "Markdown 正文；CLI 会自动展开本地 .md 文件路径" },
-    "title": { "required": true, "description": "标题（建议不超过 32 字）" },
-    "author": { "required": false, "description": "作者" },
-    "digest": { "required": false, "description": "摘要；不填则可由平台自动抓取" },
+    "config": { "required": false, "description": "JSON 配置字符串或本地 JSON 文件路径，包含 title/author/digest/cover/original 等字段" },
+    "configFile": { "required": false, "description": "本地 JSON 配置文件路径（与 --config 二选一）" },
+    "title": { "required": false, "description": "标题（建议不超过 32 字）；优先从 config 读取，此参数可覆盖" },
+    "cover": { "required": false, "description": "封面图本地路径或 URL；优先从 config 读取" },
+    "original": { "required": false, "description": "是否声明原创，默认 true；传 false 可关闭" },
     "images": { "required": false, "description": "JSON：本地图片 [{id,name,mime,base64,original}]（CLI 预处理）" },
     "coverBase64": { "required": false, "description": "封面图 base64（CLI 从 --cover 本地路径读入）" },
     "coverMime": { "required": false, "description": "封面 MIME，默认 image/jpeg" },
@@ -15,14 +17,16 @@
   },
   "capabilities": ["network", "write"],
   "readOnly": false,
-  "example": "bb-browser site weixin/draft-create ./article.md --title \"标题\" --cover ./cover.jpg"
+  "example": "bb-browser site weixin/draft-create ./article.md --configFile ./publish-config.json"
 }
 */
 async function (args) {
   if (!args.markdown) {
     return { error: "Missing argument: markdown", hint: "Pass markdown text or a local .md file path" };
   }
-  if (!args.title) return { error: "Missing argument: title" };
+  if (!args.title) {
+    return { error: "Missing argument: title", hint: "Provide --title or use --configFile with a title field" };
+  }
 
   var session = await __wxEnsureSession();
   if (session.error) return session;
@@ -99,7 +103,8 @@ async function (args) {
     digest: args.digest || "",
     contentHtml: contentHtml,
     coverUrl: coverUrl,
-    coverUrl11: coverUrl
+    coverUrl11: coverUrl,
+    original: args.original !== "false"
   });
   if (created.error) return created;
 
