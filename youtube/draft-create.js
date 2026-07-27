@@ -5,60 +5,40 @@
   "domain": "studio.youtube.com",
   "args": {
     "video": { "required": true, "description": "本地视频路径（CLI 解析后注入页面 Blob）" },
-    "config": { "required": false, "description": "JSON 内容：{title,tags,desc}" },
-    "configFile": { "required": false, "description": "本地 JSON 配置文件路径" },
-    "title": { "required": false, "description": "覆盖 config.title" },
-    "tags": { "required": false, "description": "覆盖 config.tags" },
-    "desc": { "required": false, "description": "覆盖 config.desc" }
+    "config": { "required": false, "description": "JSON 内容：{title,tags,desc}（config-first，已取代零散参数）" },
+    "configFile": { "required": false, "description": "本地 JSON 配置文件路径" }
   },
   "capabilities": ["network", "write"],
   "readOnly": false,
-  "example": "bb-browser site youtube/draft-create --video ./a.mp4 --config '{\"title\":\"标题\",\"tags\":[\"教程\"],\"desc\":\"简介\"}' --json"
+  "example": "bb-browser site youtube/draft-create --video ./a.mp4 --configFile ./draft-publish.config.json --json"
 }
 */
 async function (args) {
   var session = __ytEnsureSession();
   if (session.error) return session;
 
+  // config-first：CLI 已拒绝零散参数并归一化 config JSON（{title,tags,desc}）
   var cfg = { title: "", tags: [], desc: "" };
-  if (args.config) {
-    try {
-      var parsed = JSON.parse(args.config);
-      if (parsed && typeof parsed === "object") {
-        cfg.title = parsed.title || "";
-        cfg.desc = parsed.desc || parsed.description || "";
-        if (Array.isArray(parsed.tags)) cfg.tags = parsed.tags.map(String);
-        else if (typeof parsed.tags === "string") {
-          cfg.tags = parsed.tags.split(/[,，]/).map(function (s) {
-            return s.trim();
-          }).filter(Boolean);
-        } else if (typeof parsed.tag === "string") {
-          cfg.tags = parsed.tag.split(/[,，]/).map(function (s) {
-            return s.trim();
-          }).filter(Boolean);
-        }
-      }
-    } catch (e) {
-      return { error: "Invalid config JSON", hint: String(e) };
-    }
+  if (!args.config) {
+    return {
+      error: "Missing config",
+      hint: "Pass --config '{\"title\":...}' or --configFile <path> (config-first)",
+    };
   }
-  if (args.title) cfg.title = args.title;
-  if (args.desc) cfg.desc = args.desc;
-  if (args.tags) {
-    var t = String(args.tags).trim();
-    if (t.startsWith("[")) {
-      try {
-        cfg.tags = JSON.parse(t);
-      } catch (e) {
-        cfg.tags = t.split(/[,，]/).map(function (s) {
+  try {
+    var parsed = JSON.parse(args.config);
+    if (parsed && typeof parsed === "object") {
+      cfg.title = parsed.title || "";
+      cfg.desc = parsed.desc || parsed.description || "";
+      if (Array.isArray(parsed.tags)) cfg.tags = parsed.tags.map(String);
+      else if (typeof parsed.tags === "string") {
+        cfg.tags = parsed.tags.split(/[,，]/).map(function (s) {
           return s.trim();
         }).filter(Boolean);
       }
-    } else {
-      cfg.tags = t.split(/[,，]/).map(function (s) {
-        return s.trim();
-      }).filter(Boolean);
     }
+  } catch (e) {
+    return { error: "Invalid config JSON", hint: String(e) };
   }
 
   var title = String(cfg.title || (args.video || "untitled").replace(/\.[^.]+$/, "")).slice(0, 100);
@@ -139,6 +119,14 @@ async function (args) {
   }
   var listed = __ytListMentionsTitle(title);
 
+  // 草稿编辑链接：拿到 videoId 时直接给出 Studio 编辑页，否则只能去内容列表找
+  var editUrl = videoId
+    ? "https://studio.youtube.com/video/" + videoId + "/edit"
+    : "";
+  var manageUrl = channelId
+    ? "https://studio.youtube.com/channel/" + channelId + "/videos/upload?filter=%5B%7B%22name%22%3A%22VISIBILITY%22%2C%22value%22%3A%5B%22HAS_DRAFT%22%5D%7D%5D"
+    : "https://studio.youtube.com/";
+
   var out = {
     videoId: videoId,
     title: title,
@@ -147,6 +135,8 @@ async function (args) {
     channelId: channelId || null,
     privacy: "draft",
     state: "draft",
+    editUrl: editUrl || undefined,
+    manageUrl: manageUrl,
     studioUrl: location.href,
     uploadListUrl: uploadListUrl,
     via: "ui",
@@ -159,7 +149,7 @@ async function (args) {
     listMentionsTitle: listed,
     wizardSteps: wizard.length,
     hint:
-      "已保存为 YouTube Studio 草稿，未公开发布。在「内容」列表筛选草稿查看。固定项：观众「内容不是面向儿童的」、字幕/语言「英语」。",
+      "已保存为 YouTube Studio 草稿，未公开发布。打开 editUrl 继续编辑，或到 manageUrl（内容 → 筛选草稿）查看。固定项：观众「内容不是面向儿童的」、字幕/语言「英语」。",
   };
 
   var warnings = [];
