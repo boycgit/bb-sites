@@ -5,29 +5,27 @@
   "domain": "member.bilibili.com",
   "args": {
     "video": { "required": true, "description": "本地视频路径（CLI 解析后注入页面 Blob）" },
-    "config": { "required": false, "description": "JSON 内容字符串：{title,tags,desc}" },
-    "configFile": { "required": false, "description": "本地 JSON 配置文件路径（CLI 读取，与 config 二选一）" },
-    "title": { "required": false, "description": "覆盖 config.title" },
-    "tags": { "required": false, "description": "覆盖 config.tags（逗号分隔或 JSON 数组）" },
-    "desc": { "required": false, "description": "覆盖 config.desc" }
+    "config": { "required": false, "description": "JSON 配置字符串或本地 JSON 文件路径：{title,tags,desc,cover}（config-first，已取代零散参数；cover 支持本地图/URL）" },
+    "configFile": { "required": false, "description": "本地 JSON 配置文件路径（与 --config 二选一）" }
   },
   "capabilities": ["network", "write"],
   "readOnly": false,
-  "example": "bb-browser site bilibili/draft-create --video ./a.mp4 --config '{\"title\":\"标题\",\"tags\":[\"教程\"],\"desc\":\"简介\"}' --json"
+  "example": "bb-browser site bilibili/draft-create --video ./a.mp4 --configFile ./draft-publish.config.json --json"
 }
 */
 async function (args) {
   const login = await biliEnsureLogin();
   if (login.error) return login;
 
-  // Parse config (JSON content; CLI may have expanded configFile → config)
-  let cfg = { title: "", tags: [], desc: "" };
+  // config-first：CLI 已把 --config/--configFile 归一化为 {title,tags,desc,cover} JSON 内容
+  let cfg = { title: "", tags: [], desc: "", cover: "" };
   if (args.config) {
     try {
       const parsed = JSON.parse(args.config);
       if (parsed && typeof parsed === "object") {
         cfg.title = parsed.title || "";
         cfg.desc = parsed.desc || parsed.description || "";
+        cfg.cover = typeof parsed.cover === "string" ? parsed.cover : "";
         if (Array.isArray(parsed.tags)) cfg.tags = parsed.tags.map(String);
         else if (typeof parsed.tags === "string") {
           cfg.tags = parsed.tags.split(/[,，]/).map(function (s) {
@@ -41,24 +39,6 @@ async function (args) {
       }
     } catch (e) {
       return { error: "Invalid config JSON", hint: String(e) };
-    }
-  }
-  if (args.title) cfg.title = args.title;
-  if (args.desc) cfg.desc = args.desc;
-  if (args.tags) {
-    const t = String(args.tags).trim();
-    if (t.startsWith("[")) {
-      try {
-        cfg.tags = JSON.parse(t);
-      } catch (e) {
-        cfg.tags = t.split(/[,，]/).map(function (s) {
-          return s.trim();
-        }).filter(Boolean);
-      }
-    } else {
-      cfg.tags = t.split(/[,，]/).map(function (s) {
-        return s.trim();
-      }).filter(Boolean);
     }
   }
 
@@ -92,6 +72,26 @@ async function (args) {
   const defaultCover =
     "https://i0.hdslb.com/bfs/archive/eaafd71ddf5e726a61534c19fcdf857f1062fb9e.jpg";
 
+  // 自定义封面：本地图（CLI 已转 base64）走 cover/up 换 bfs URL；https URL 直接用；失败不阻断存草稿
+  let cover = defaultCover;
+  let coverSource = "default";
+  let coverWarning = "";
+  if (args.coverBase64) {
+    const dataUrl =
+      "data:" + (args.coverMime || "image/png") + ";base64," + args.coverBase64;
+    const uploaded = await biliCoverUp(login.csrf, dataUrl);
+    if (uploaded.url) {
+      cover = uploaded.url;
+      coverSource = "uploaded";
+    } else {
+      coverWarning =
+        "封面上传失败，已回退默认封面：" + (uploaded.hint || uploaded.error || "");
+    }
+  } else if (/^https:\/\//i.test(cfg.cover)) {
+    cover = cfg.cover;
+    coverSource = "url";
+  }
+
   // Save draft — fixed: 自制 + 无需标注 + 分区知识
   // cid must equal preupload biz_id
   const saved = await biliDraftAdd({
@@ -111,7 +111,7 @@ async function (args) {
         is_hdr: false,
       },
     ],
-    cover: defaultCover,
+    cover: cover,
   });
 
   if (saved.error) {
@@ -142,6 +142,9 @@ async function (args) {
     title: title,
     tags: tags,
     desc: desc,
+    cover: cover,
+    coverSource: coverSource,
+    coverWarning: coverWarning || undefined,
     filename: up.filename,
     draftUrl: draftUrl,
     manageUrl: BILI_DRAFT_MANAGE_URL,

@@ -218,6 +218,33 @@ async function biliUposUpload(blob, fileName, onProgress) {
 }
 
 /**
+ * Upload a cover image (data URL) to bilibili bfs via member cover/up.
+ * Returns { url } (https-normalized) or { error, hint }.
+ */
+async function biliCoverUp(csrf, dataUrl) {
+  try {
+    const body = new URLSearchParams({ cover: dataUrl, csrf: csrf || biliGetCsrf() });
+    const resp = await fetch("https://member.bilibili.com/x/vu/web/cover/up", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+    const j = await resp.json();
+    if (!j || j.code !== 0 || !j.data || !j.data.url) {
+      return {
+        error: "cover/up failed",
+        hint: JSON.stringify(j).slice(0, 300),
+      };
+    }
+    // bfs 返回可能是 http，统一成 https 避免混合内容
+    return { url: String(j.data.url).replace(/^http:\/\//, "https://") };
+  } catch (e) {
+    return { error: "cover/up failed", hint: String(e) };
+  }
+}
+
+/**
  * Save draft (not publish).
  * videos: [{ title, filename, desc? }]
  */
