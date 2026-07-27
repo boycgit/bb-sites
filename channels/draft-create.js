@@ -5,22 +5,19 @@
   "domain": "channels.weixin.qq.com",
   "args": {
     "video": { "required": true, "description": "本地视频路径（CLI 解析后注入页面 Blob）" },
-    "config": { "required": false, "description": "JSON 内容：{title,tags,desc}" },
-    "configFile": { "required": false, "description": "本地 JSON 配置文件路径" },
-    "title": { "required": false, "description": "短标题，覆盖 config.title" },
-    "tags": { "required": false, "description": "话题标签" },
-    "desc": { "required": false, "description": "视频描述" }
+    "config": { "required": false, "description": "JSON 配置字符串或本地 JSON 文件路径：{title,tags,desc}（config-first，已取代零散参数）" },
+    "configFile": { "required": false, "description": "本地 JSON 配置文件路径（与 --config 二选一）" }
   },
   "capabilities": ["network", "write"],
   "readOnly": false,
-  "example": "bb-browser site channels/draft-create --video ./a.mp4 --config '{\"title\":\"短标题\",\"tags\":[\"算法\"],\"desc\":\"简介\"}' --json"
+  "example": "bb-browser site channels/draft-create --video ./a.mp4 --configFile ./draft-publish.config.json --json"
 }
 */
 async function (args) {
   var session = await __chEnsureSession();
   if (session.error) return session;
 
-  // Parse config
+  // config-first：CLI 已把 --config/--configFile 归一化为 {title,tags,desc} JSON 内容
   var cfg = { title: "", tags: [], desc: "" };
   if (args.config) {
     try {
@@ -41,24 +38,6 @@ async function (args) {
       }
     } catch (e) {
       return { error: "Invalid config JSON", hint: String(e) };
-    }
-  }
-  if (args.title) cfg.title = args.title;
-  if (args.desc) cfg.desc = args.desc;
-  if (args.tags) {
-    var t = String(args.tags).trim();
-    if (t.startsWith("[")) {
-      try {
-        cfg.tags = JSON.parse(t);
-      } catch (e) {
-        cfg.tags = t.split(/[,，]/).map(function (s) {
-          return s.trim();
-        }).filter(Boolean);
-      }
-    } else {
-      cfg.tags = t.split(/[,，]/).map(function (s) {
-        return s.trim();
-      }).filter(Boolean);
     }
   }
 
