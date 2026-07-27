@@ -5,14 +5,15 @@
   "domain": "creator.xiaohongshu.com",
   "args": {
     "markdown": { "required": true, "description": "Markdown 正文或本地路径（CLI 展开）" },
-    "title": { "required": false, "description": "标题，默认 md 一级标题（最多 64 字）" },
-    "images": { "required": false, "description": "JSON 本地图 [{id,name,mime,base64,alt,original}]" },
-    "videos": { "required": false, "description": "JSON 本地/远程视频 [{id,name,mime,base64,original,skipped}]" },
+    "config": { "required": false, "description": "JSON 配置字符串或本地 JSON 文件路径，包含 title 字段" },
+    "configFile": { "required": false, "description": "本地 JSON 配置文件路径（与 --config 二选一）" },
+    "images": { "required": false, "description": "JSON 本地图 [{id,name,mime,base64,alt,original}]（CLI 预处理）" },
+    "videos": { "required": false, "description": "JSON 本地/远程视频 [{id,name,mime,base64,original,skipped}]（CLI 预处理）" },
     "videoSkipNotes": { "required": false, "description": "CLI 跳过视频说明 JSON 字符串数组" }
   },
   "capabilities": ["network", "write"],
   "readOnly": false,
-  "example": "bb-browser site xiaohongshu/draft-create ./draft.md --json"
+  "example": "bb-browser site xiaohongshu/draft-create ./draft.md --configFile ./draft-publish.config.json --json"
 }
 */
 async function (args) {
@@ -269,10 +270,15 @@ async function (args) {
   await xhsDraftSleep(2500);
 
   const draftMeta = await xhsDraftFindLatestDraft(title);
+  const draftId = (draftMeta && draftMeta.draftId) || null;
+  // 小红书长文草稿没有独立 URL（草稿箱是抽屉、draftId 查询参数无效，2026-07 实测），
+  // 所以 editUrl / draftUrl / manageUrl 都指向写长文页，靠标题在草稿箱里认。
   const out = {
-    draftId: (draftMeta && draftMeta.draftId) || null,
+    draftId: draftId,
     title: title,
     editUrl: XHS_DRAFT_EDIT_URL,
+    draftUrl: XHS_DRAFT_EDIT_URL,
+    manageUrl: XHS_DRAFT_EDIT_URL,
     manageHint: "写长文页右上角「草稿箱」→「长文笔记」tab（草稿仅存本机浏览器，清数据会丢）",
     uploadedImages: uploadedImages,
     uploadedVideos: uploadedVideos,
@@ -280,7 +286,11 @@ async function (args) {
     state: "local_draft",
     hint:
       "草稿保存在当前 bb-browser Chrome 的本地 IndexedDB，不会自动发布。" +
-      "请打开 editUrl，必要时从草稿箱进入；图片应已嵌入正文。",
+      "请打开 editUrl（写长文页），从右上角「草稿箱 → 长文笔记」按标题「" +
+      title +
+      "」进入" +
+      (draftId ? "（draftId=" + draftId + "）" : "") +
+      "；图片应已嵌入正文。",
   };
   if (warnings.length) out.warnings = warnings;
   if (!out.draftId) {

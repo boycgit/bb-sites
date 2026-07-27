@@ -11,7 +11,7 @@
 # 在 bb-browser 控制的 Chrome 登录创作者平台
 bb-browser open "https://creator.xiaohongshu.com/publish/publish?source=official&from=tab_switch&target=article"
 
-bb-browser site xiaohongshu/draft-create ./draft.md --json
+bb-browser site xiaohongshu/draft-create ./draft.md --configFile ./draft-publish.config.json --json
 ```
 
 ### 重要限制
@@ -24,19 +24,23 @@ bb-browser site xiaohongshu/draft-create ./draft.md --json
 | 不自动发布 | 只写草稿，请在编辑器人工检查后发布 |
 | 视频 | 可上传到平台；长文 TipTap 可能不支持正文内嵌，见 `warnings` |
 
-### 参数
+### 参数（config-first）
 
 | 参数 | 说明 |
 |------|------|
-| `markdown` | 正文或 `.md` 路径 |
-| `--title` | 默认取 md 一级标题 |
+| `markdown` | 正文或 `.md` 路径（位置参数） |
+| `--config` | 内联 JSON（以 `{` 开头）或 JSON 文件路径 |
+| `--configFile` | 本地 JSON 配置文件路径（与 `--config` 二选一） |
+
+config 字段：`{ "title": "标题" }`（缺省取 md 一级标题，上限 64 字）。
+旧的零散参数 `--title` 已从公开接口移除。
 
 ### 返回
 
 | 字段 | 说明 |
 |------|------|
-| `editUrl` | 写长文页 |
-| `draftId` | IndexedDB 草稿 id（若可读） |
+| `editUrl` / `draftUrl` / `manageUrl` | 均为写长文页——长文草稿没有独立 URL |
+| `draftId` | IndexedDB 草稿 id（若可读），用于在草稿箱核对是哪一篇 |
 | `manageHint` | 草稿箱入口说明 |
 | `uploadedImages` / `uploadedVideos` | 上传统计 |
 
