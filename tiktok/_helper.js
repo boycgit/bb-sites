@@ -13,6 +13,7 @@
 
 var __TT_UPLOAD_URL =
   "https://www.tiktok.com/tiktokstudio/upload?from=creator_center&tab=video";
+var __TT_MANAGE_URL = "https://www.tiktok.com/tiktokstudio/content";
 var __TT_CAPTION_LIMIT = 4000;
 
 function __ttSleep(ms) {
@@ -257,7 +258,7 @@ async function __ttMountVideo(args) {
     }
     return {
       error: "Local video not injected",
-      hint: "CLI must pass --video; daemon injects Blob or setFileInputFiles",
+      hint: "Put the local path in config.video; CLI/daemon must inject it via setFileInputFiles or Blob fallback",
     };
   }
 
@@ -374,6 +375,30 @@ function __ttIsRealUploadReady() {
 }
 
 /**
+ * Return the upload-page error shown by TikTok Studio, if any.
+ * The post-upload editor can collapse into a generic retry screen even after
+ * the media storage API accepted every chunk, so HTTP success is not enough.
+ */
+function __ttGetUploadError() {
+  var text = ((document.body && document.body.innerText) || "").replace(/\s+/g, " ").trim();
+  var patterns = [
+    /上传失败[^。！!\n]*/i,
+    /格式不支持[^。！!\n]*/i,
+    /文件过大[^。！!\n]*/i,
+    /出错了\s*请重试/i,
+    /Upload failed[^.！!\n]*/i,
+    /Something went wrong\s*(?:Please try again)?/i,
+    /not supported[^.！!\n]*/i,
+    /too large[^.！!\n]*/i,
+  ];
+  for (var i = 0; i < patterns.length; i++) {
+    var match = text.match(patterns[i]);
+    if (match) return match[0].trim();
+  }
+  return "";
+}
+
+/**
  * Wait until video is truly uploaded (已上传) and caption editor is ready.
  */
 async function __ttWaitEditForm(timeoutMs) {
@@ -383,8 +408,9 @@ async function __ttWaitEditForm(timeoutMs) {
   while (Date.now() - start < timeoutMs) {
     var text = (document.body && document.body.innerText) || "";
     last = text.slice(0, 280);
-    if (/上传失败|格式不支持|文件过大|Upload failed|not supported|too large/i.test(text)) {
-      return { error: "Upload failed", hint: last };
+    var uploadError = __ttGetUploadError();
+    if (uploadError) {
+      return { error: "TikTok Studio upload failed: " + uploadError, hint: last };
     }
 
     var real = __ttIsRealUploadReady();
@@ -495,8 +521,11 @@ function __ttBuildCaption(title, desc, tags) {
       return "#" + x;
     })
     .join(" ");
-  if (hash) parts.push(hash);
-  return parts.join("\n").slice(0, __TT_CAPTION_LIMIT);
+  var body = parts.join("\n");
+  if (!hash) return body.slice(0, __TT_CAPTION_LIMIT);
+  var suffix = "\n" + hash;
+  if (suffix.length >= __TT_CAPTION_LIMIT) return suffix.slice(0, __TT_CAPTION_LIMIT);
+  return body.slice(0, __TT_CAPTION_LIMIT - suffix.length) + suffix;
 }
 
 async function __ttFillMetadata(cfg) {

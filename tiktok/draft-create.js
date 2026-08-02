@@ -1,16 +1,15 @@
 /* @meta
 {
   "name": "tiktok/draft-create",
-  "description": "上传本地视频到 TikTok Studio 并填写元数据（停留编辑页，不自动发布；无独立草稿 URL）",
+  "description": "按 JSON config 上传本地视频到 TikTok Studio 未发布编辑页（不自动发布）",
   "domain": "www.tiktok.com",
   "args": {
-    "video": { "required": true, "description": "本地视频路径（CLI 解析后注入页面 Blob）" },
-    "config": { "required": false, "description": "JSON 内容：{title,tags,desc}（config-first，已取代零散参数）" },
-    "configFile": { "required": false, "description": "本地 JSON 配置文件路径" }
+    "config": { "required": false, "description": "JSON 内容：{video,title,tags,desc}（与 configFile 二选一）" },
+    "configFile": { "required": false, "description": "本地 JSON 配置文件路径，内容为 {video,title,tags,desc}" }
   },
   "capabilities": ["network", "write"],
   "readOnly": false,
-  "example": "bb-browser site tiktok/draft-create --video ./a.mp4 --configFile ./draft-publish.config.json --json"
+  "example": "bb-browser site tiktok/draft-create --configFile ./draft-publish.config.json --json"
 }
 */
 async function (args) {
@@ -20,13 +19,14 @@ async function (args) {
   if (!args.config) {
     return {
       error: "Missing config",
-      hint: "Pass --config '{\"title\":...}' or --configFile <path> (config-first)",
+      hint: "Pass --config '{\"video\":\"./a.mp4\",\"title\":...}' or --configFile <path>",
     };
   }
-  var cfg = { title: "", tags: [], desc: "" };
+  var cfg = { video: "", title: "", tags: [], desc: "" };
   try {
     var parsed = JSON.parse(args.config);
     if (parsed && typeof parsed === "object") {
+      cfg.video = parsed.video || "";
       cfg.title = parsed.title || "";
       cfg.desc = parsed.desc || parsed.description || "";
       if (Array.isArray(parsed.tags)) cfg.tags = parsed.tags.map(String);
@@ -44,7 +44,15 @@ async function (args) {
     return { error: "Invalid config JSON", hint: String(e) };
   }
 
-  var title = String(cfg.title || (args.video || "untitled").replace(/\.[^.]+$/, "")).slice(0, 100);
+  if (!cfg.video && !args.video && !args.__localVideoName) {
+    return {
+      error: "Missing config field: video",
+      hint: 'Set "video" to a local video path in --config / --configFile JSON',
+    };
+  }
+
+  var videoName = String(args.__localVideoName || args.video || cfg.video || "untitled");
+  var title = String(cfg.title || videoName.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "")).slice(0, 100);
   var tags = (cfg.tags || []).slice(0, 20);
   var desc = String(cfg.desc || "").slice(0, 4000);
   cfg.title = title;
@@ -82,13 +90,35 @@ async function (args) {
   var upEl = document.querySelector('[data-e2e="upload_status_container"]');
   var upText = (upEl && (upEl.innerText || upEl.textContent)) || "";
 
+  if (!real.ok) {
+    return {
+      error: "TikTok Studio did not reach the uploaded state",
+      hint: __ttGetUploadError() || "Missing 已上传 / Upload complete status; the edit page is not a usable draft",
+      uploaded: false,
+      uploadStatus: upText.slice(0, 200),
+      mount: { name: mount.name, size: mount.size },
+    };
+  }
+  if (!filled.captionOk && !filled.descOk) {
+    return {
+      error: "TikTok Studio caption editor was not filled",
+      hint: __ttGetUploadError() || "The video uploaded, but the unpublished edit page is incomplete",
+      uploaded: true,
+      uploadStatus: upText.slice(0, 200),
+      mount: { name: mount.name, size: mount.size },
+    };
+  }
+
+  var finalEditUrl = location.href || __TT_UPLOAD_URL;
   var out = {
     title: title,
     tags: tags,
     desc: desc,
     caption: filled.caption || null,
     state: "edit",
-    editUrl: location.href,
+    draftUrl: finalEditUrl,
+    editUrl: finalEditUrl,
+    manageUrl: __TT_MANAGE_URL,
     uploadUrl: __TT_UPLOAD_URL,
     via: "ui",
     uploadElapsedMs: wait.elapsedMs,
@@ -102,18 +132,10 @@ async function (args) {
     },
     mount: { name: mount.name, size: mount.size },
     hint:
-      "已上传并填写 TikTok Studio 编辑页；未点发布。平台无独立草稿 URL，请保留当前页人工检查后发布。",
+      "已上传并填写 TikTok Studio 未发布编辑页；未点发布。draftUrl/editUrl 仅用于定位当前编辑标签页，请保留该页继续二次编辑，关闭后内容可能丢失。manageUrl 仅展示已发布/预约内容，不是草稿箱。",
   };
 
   var warnings = [];
-  if (!real.ok) {
-    warnings.push(
-      "video may not be fully uploaded (missing 已上传 in upload status) — do not publish until status shows 已上传",
-    );
-  }
-  if (!filled.captionOk && !filled.descOk) {
-    warnings.push("caption editor may not have been filled — open editUrl and confirm 视频描述");
-  }
   if (filled.editorText && title && filled.editorText.indexOf(title.slice(0, 6)) < 0) {
     warnings.push("editor text may not match title; verify caption on edit page");
   }
