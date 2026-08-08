@@ -1,23 +1,26 @@
 /* @meta
 {
   "name": "youtube/draft-create",
-  "description": "上传本地视频到 YouTube Studio 并保存为草稿（不自动公开发布）",
+  "description": "上传本地无硬字幕视频到 YouTube Studio 并保存为草稿；可选同步上传软字幕（SRT 等）",
   "domain": "studio.youtube.com",
   "args": {
-    "video": { "required": true, "description": "本地视频路径（CLI 解析后注入页面 Blob）" },
-    "config": { "required": false, "description": "JSON 内容：{title,tags,desc}（config-first，已取代零散参数）" },
-    "configFile": { "required": false, "description": "本地 JSON 配置文件路径" }
+    "video": { "required": true, "description": "本地视频路径（CLI 解析后注入页面 Blob；建议无硬字幕 unsub）" },
+    "config": { "required": false, "description": "JSON：{title,tags,desc,captions?}；captions 由 CLI/daemon 注入 base64" },
+    "configFile": { "required": false, "description": "本地 JSON 配置文件路径" },
+    "subtitle": { "required": false, "description": "本地字幕路径（.srt/.vtt 等，CLI 解析后经 daemon 注入）" },
+    "captionLanguage": { "required": false, "description": "单条字幕语言：en / zh / zh-Hans（默认 en）" },
+    "captions": { "required": false, "description": "daemon 注入的字幕 JSON（含 base64），一般无需手写" }
   },
   "capabilities": ["network", "write"],
   "readOnly": false,
-  "example": "bb-browser site youtube/draft-create --video ./a.mp4 --configFile ./draft-publish.config.json --json"
+  "example": "bb-browser site youtube/draft-create --video ./distribution.unsub.en.mp4 --subtitle ./distribution.en.srt --captionLanguage en --configFile ./draft-publish.config.json --json"
 }
 */
 async function (args) {
   var session = __ytEnsureSession();
   if (session.error) return session;
 
-  // config-first：CLI 已拒绝零散参数并归一化 config JSON（{title,tags,desc}）
+  // config-first：CLI 已拒绝零散 title/tags/desc 并归一化 config JSON
   var cfg = { title: "", tags: [], desc: "" };
   if (!args.config) {
     return {
@@ -47,6 +50,8 @@ async function (args) {
   cfg.title = title;
   cfg.tags = tags;
   cfg.desc = desc;
+
+  var captions = __ytParseCaptionsArg(args);
 
   var channelId = session.channelId || __ytGetChannelId();
   var uploadListUrl = channelId
@@ -78,8 +83,18 @@ async function (args) {
   // re-apply title after any UI settle
   await __ytFillMetadata(cfg);
 
-  var fixed = await __ytApplyFixedFields();
+  // 按首条字幕语言设置视频语言（无字幕时不强行英语）
+  var langLabels =
+    captions.length > 0 ? __ytCaptionLanguageLabels(captions[0].language) : null;
+  var fixed = await __ytApplyFixedFields(langLabels);
   await __ytSleep(400);
+
+  // 多语言：在 DETAILS 阶段尽量上传软字幕（保存后跳转会中断当前脚本）
+  var captionUpload = { skipped: true };
+  if (captions.length) {
+    captionUpload = await __ytTryUploadCaptionsInDialog(captions);
+    await __ytSleep(600);
+  }
 
   // Advance through checks → visibility
   var wizard = await __ytClickNextUntilVisibilityOrSave(5);
@@ -93,6 +108,7 @@ async function (args) {
       filled: filled,
       fixed: fixed,
       wizard: wizard,
+      captionUpload: captionUpload,
       uploaded: true,
     };
   }
@@ -123,9 +139,20 @@ async function (args) {
   var editUrl = videoId
     ? "https://studio.youtube.com/video/" + videoId + "/edit"
     : "";
+  var translationsUrl = videoId
+    ? "https://studio.youtube.com/video/" + videoId + "/translations"
+    : "";
   var manageUrl = channelId
     ? "https://studio.youtube.com/channel/" + channelId + "/videos/upload?filter=%5B%7B%22name%22%3A%22VISIBILITY%22%2C%22value%22%3A%5B%22HAS_DRAFT%22%5D%7D%5D"
     : "https://studio.youtube.com/";
+
+  // 若 DETAILS 内字幕未成功且已有 videoId，尝试 SPA 进入 translations 补传（不整页硬跳）
+  if (captions.length && videoId && (!captionUpload || captionUpload.skipped || !captionUpload.ok)) {
+    var retry = await __ytUploadCaptionsAfterSave(videoId, captions);
+    if (retry && !retry.skipped) {
+      captionUpload = retry;
+    }
+  }
 
   var out = {
     videoId: videoId,
@@ -136,6 +163,7 @@ async function (args) {
     privacy: "draft",
     state: "draft",
     editUrl: editUrl || undefined,
+    translationsUrl: translationsUrl || undefined,
     manageUrl: manageUrl,
     studioUrl: location.href,
     uploadListUrl: uploadListUrl,
@@ -146,10 +174,16 @@ async function (args) {
       audience: fixed.audience && fixed.audience.ok,
       captions: fixed.captions && fixed.captions.ok,
     },
+    captionUpload: captionUpload,
+    captionsRequested: captions.map(function (c) {
+      return { language: c.language, name: c.name };
+    }),
     listMentionsTitle: listed,
     wizardSteps: wizard.length,
     hint:
-      "已保存为 YouTube Studio 草稿，未公开发布。打开 editUrl 继续编辑，或到 manageUrl（内容 → 筛选草稿）查看。固定项：观众「内容不是面向儿童的」、字幕/语言「英语」。",
+      "已保存为 YouTube Studio 草稿，未公开发布。推荐使用无硬字幕视频 + 软字幕（SRT）。" +
+      "打开 editUrl 继续编辑；字幕页 translationsUrl；或 manageUrl 筛选草稿。" +
+      "固定项：观众「内容不是面向儿童的」。",
   };
 
   var warnings = [];
@@ -157,8 +191,18 @@ async function (args) {
   if (!filled.descOk) warnings.push("description field may not have been filled");
   if (tags.length && !filled.tagsOk) warnings.push("tags field may not have been filled");
   if (!fixed.audience || !fixed.audience.ok) warnings.push("audience not for kids may need manual check");
-  if (!fixed.captions || !fixed.captions.ok) warnings.push("captions/language English may need manual check");
   if (!videoId && !listed) warnings.push("could not confirm videoId or list title yet — refresh Studio content");
+  if (captions.length) {
+    if (!captionUpload || captionUpload.skipped) {
+      warnings.push(
+        "captions were provided but not uploaded automatically; open translationsUrl to upload SRT manually",
+      );
+    } else if (!captionUpload.ok) {
+      warnings.push(
+        "caption upload may be incomplete; check translationsUrl and upload remaining SRT files",
+      );
+    }
+  }
   if (warnings.length) out.warnings = warnings;
 
   return out;

@@ -431,9 +431,10 @@ async function __ytFillMetadata(cfg) {
 }
 
 /**
- * Fixed: audience not for kids + captions/language English
+ * Fixed: audience not for kids.
+ * 视频语言可选（默认不强制英语，便于中英多语言适配）；传入 languageLabels 时尝试点选。
  */
-async function __ytApplyFixedFields() {
+async function __ytApplyFixedFields(languageLabels) {
   var dialog = __ytGetUploadsDialog();
   var out = { audience: null, captions: null };
 
@@ -468,17 +469,16 @@ async function __ytApplyFixedFields() {
   }
   await __ytSleep(400);
 
-  // Captions / language English
-  // May be under 字幕 or 视频语言
-  out.captions = __ytClickByText(["字幕", "Captions", "语言", "Language"], dialog);
-  await __ytSleep(500);
-  var eng = __ytClickByText(["英语", "English", "英文"], dialog);
-  if (eng.ok) {
-    out.captions = { ok: true, text: eng.text, via: "menu" };
+  // 视频语言（可选）：按字幕轨语言设置，避免强制英语覆盖中文投稿
+  if (languageLabels && languageLabels.length) {
+    __ytClickByText(["视频语言", "Video language", "语言", "Language"], dialog);
+    await __ytSleep(400);
+    var lang = __ytClickByText(languageLabels, dialog);
+    out.captions = lang.ok
+      ? { ok: true, text: lang.text, via: "video-language" }
+      : { ok: false, labels: languageLabels };
   } else {
-    // Try dropdowns with English
-    out.captions = eng;
-    // Soft: mark as warning only later
+    out.captions = { ok: true, skipped: true, via: "no-language-forced" };
   }
 
   return out;
@@ -614,4 +614,331 @@ function __ytGetVideoIdFromUrl() {
 function __ytListMentionsTitle(title) {
   var body = (document.body && document.body.innerText) || "";
   return body.indexOf(title) >= 0;
+}
+
+/**
+ * Parse captions payload from adapter args.
+ * Daemon 注入: [{language,name,mime,size,base64}]
+ * 或 CLI config 元数据（无 base64 时无法上传）。
+ */
+function __ytParseCaptionsArg(args) {
+  var raw = (args && (args.captions || args.__captions)) || "";
+  if (!raw) return [];
+  try {
+    var list = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!Array.isArray(list)) return [];
+    return list
+      .filter(function (item) {
+        return item && (item.base64 || item.globalName);
+      })
+      .map(function (item) {
+        return {
+          language: String(item.language || "en"),
+          name: String(item.name || "captions.srt"),
+          mime: String(item.mime || "application/x-subrip"),
+          base64: item.base64 ? String(item.base64) : "",
+          globalName: item.globalName ? String(item.globalName) : "",
+        };
+      });
+  } catch (e) {
+    return [];
+  }
+}
+
+function __ytBase64ToFile(base64, name, mime) {
+  var bin = atob(base64);
+  var arr = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  try {
+    return new File([arr], name, { type: mime || "application/x-subrip", lastModified: Date.now() });
+  } catch (e) {
+    return new Blob([arr], { type: mime || "application/x-subrip" });
+  }
+}
+
+function __ytCaptionLanguageLabels(lang) {
+  var code = String(lang || "en").toLowerCase();
+  if (code === "zh" || code.indexOf("zh-hans") === 0 || code === "zh-cn" || code === "chinese") {
+    return [
+      "中文（简体）",
+      "中文(简体)",
+      "Chinese (Simplified)",
+      "Chinese",
+      "简体中文",
+      "zh-Hans",
+      "zh-CN",
+    ];
+  }
+  if (code.indexOf("zh-hant") === 0 || code === "zh-tw" || code === "zh-hk") {
+    return ["中文（繁体）", "中文(繁體)", "Chinese (Traditional)", "zh-Hant", "zh-TW"];
+  }
+  if (code === "en" || code.indexOf("en-") === 0 || code === "english") {
+    return ["英语", "English", "英文", "en"];
+  }
+  return [String(lang), code];
+}
+
+/**
+ * 将字幕文件挂到页面上任意可见的 file input。
+ */
+function __ytAssignFileToInput(input, file) {
+  if (!input || !file) return false;
+  try {
+    var dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * 在 Studio 字幕/translations 页上传一条字幕轨道。
+ * 典型路径：video/<id>/translations → 添加语言 → 添加字幕 → 上传文件
+ */
+async function __ytUploadCaptionTrack(caption) {
+  var result = {
+    language: caption.language,
+    name: caption.name,
+    ok: false,
+    steps: [],
+  };
+  var file = null;
+  if (caption.base64) {
+    file = __ytBase64ToFile(caption.base64, caption.name, caption.mime);
+  } else if (caption.globalName && window[caption.globalName]) {
+    var blob = window[caption.globalName];
+    try {
+      file = new File([blob], caption.name, {
+        type: caption.mime || blob.type || "application/x-subrip",
+        lastModified: Date.now(),
+      });
+    } catch (e) {
+      file = blob;
+    }
+  }
+  if (!file) {
+    result.error = "Caption payload missing base64/blob";
+    return result;
+  }
+
+  // 1) 添加语言
+  var addLang = __ytClickByText([
+    "添加语言",
+    "ADD LANGUAGE",
+    "Add language",
+    "添加",
+  ]);
+  result.steps.push({ addLanguage: addLang.ok, text: addLang.text || null });
+  await __ytSleep(700);
+
+  // 2) 选择语言
+  var labels = __ytCaptionLanguageLabels(caption.language);
+  var langPick = __ytClickByText(labels);
+  if (!langPick.ok) {
+    // 语言搜索框
+    var search =
+      __ytDeepQuery('input[placeholder*="搜索"]') ||
+      __ytDeepQuery('input[placeholder*="Search"]') ||
+      __ytDeepQuery("tp-yt-paper-dialog input") ||
+      __ytDeepQuery("ytcp-language-search input");
+    if (search) {
+      search.focus();
+      search.value = labels[0];
+      search.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+      await __ytSleep(500);
+      langPick = __ytClickByText(labels);
+    }
+  }
+  result.steps.push({ pickLanguage: langPick.ok, text: langPick.text || null });
+  await __ytSleep(900);
+
+  // 3) 添加字幕 / 上传文件
+  var addSub = __ytClickByText([
+    "添加",
+    "ADD",
+    "上传文件",
+    "Upload file",
+    "Upload",
+    "With timing",
+    "带时间戳",
+  ]);
+  result.steps.push({ addSubtitles: addSub.ok, text: addSub.text || null });
+  await __ytSleep(800);
+
+  // 优先选「上传文件」
+  var uploadOpt = __ytClickByText([
+    "上传文件",
+    "Upload file",
+    "Upload a file",
+    "上传",
+  ]);
+  result.steps.push({ uploadOption: uploadOpt.ok, text: uploadOpt.text || null });
+  await __ytSleep(600);
+
+  // 4) file input
+  var input =
+    __ytDeepQuery('input[type=file][accept*="srt"]') ||
+    __ytDeepQuery('input[type=file][accept*=".srt"]') ||
+    __ytDeepQuery('input[type=file][accept*="vtt"]') ||
+    __ytDeepQuery('input[type=file]');
+  if (!input) {
+    // 再点一次可能弹出的「选择文件」
+    __ytClickByText(["选择文件", "Choose file", "Browse"]);
+    await __ytSleep(500);
+    input =
+      __ytDeepQuery('input[type=file][accept*="srt"]') ||
+      __ytDeepQuery("input[type=file]");
+  }
+  if (!input) {
+    result.error = "Caption file input not found on translations page";
+    return result;
+  }
+  if (!__ytAssignFileToInput(input, file)) {
+    result.error = "Failed to assign caption File to input";
+    return result;
+  }
+  result.steps.push({ fileAssigned: true, name: caption.name });
+  await __ytSleep(1500);
+
+  // 5) 确认保存字幕
+  var done = __ytClickByText([
+    "完成",
+    "Done",
+    "保存",
+    "Save",
+    "发布",
+    "Publish",
+  ]);
+  // 避免误点视频「公开发布」：仅在对话框上下文中优先 Done/完成
+  result.steps.push({ confirm: done.ok, text: done.text || null });
+  await __ytSleep(1500);
+
+  result.ok = true;
+  return result;
+}
+
+/**
+ * 保存草稿拿到 videoId 后，打开 translations 页并逐条上传字幕。
+ */
+async function __ytUploadCaptionsAfterSave(videoId, captions) {
+  if (!videoId || !captions || !captions.length) {
+    return { skipped: true, reason: !videoId ? "no videoId" : "no captions" };
+  }
+  var translationsUrl =
+    "https://studio.youtube.com/video/" + videoId + "/translations";
+  // 关闭可能仍开着的上传对话框
+  __ytClickByText(["关闭", "Close", "取消", "Cancel"]);
+  await __ytSleep(500);
+
+  if (location.href.indexOf("/video/" + videoId + "/translations") < 0) {
+    location.href = translationsUrl;
+    // 等待页面加载（adapter 在同页执行时导航会卸载脚本——由 draft-create 在导航前返回部分结果不现实）
+    // 因此：仅当已在 translations 页，或短等后仍在 studio 同文档时继续。
+    // 实际导航会中断当前 JS；caller 应在保存后用同一 tab 二次运行不现实。
+    // 改：不使用 location.href 整页跳转，优先点左侧「字幕」菜单（SPA）。
+  }
+
+  // SPA：优先点「字幕 / Subtitles / 翻译」
+  var nav = __ytClickByText([
+    "字幕",
+    "Subtitles",
+    "翻译",
+    "Translations",
+    "字幕与翻译",
+  ]);
+  await __ytSleep(1500);
+  if (!nav.ok && location.pathname.indexOf("/translations") < 0) {
+    // 最后手段：SPA 路由 pushState + 自定义，或完整导航
+    try {
+      history.pushState({}, "", translationsUrl);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      await __ytSleep(2000);
+    } catch (e) { /* ignore */ }
+    if (location.pathname.indexOf("/translations") < 0) {
+      // 硬导航会丢掉当前执行上下文；返回提示让调用方用 manage/edit 手工补
+      return {
+        ok: false,
+        error: "Could not open translations SPA without full navigation",
+        hint:
+          "Open " +
+          translationsUrl +
+          " and upload caption files manually, or re-run with Studio already on translations (rare).",
+        translationsUrl: translationsUrl,
+        captions: captions.map(function (c) {
+          return { language: c.language, name: c.name };
+        }),
+      };
+    }
+  }
+
+  var results = [];
+  for (var i = 0; i < captions.length; i++) {
+    var one = await __ytUploadCaptionTrack(captions[i]);
+    results.push(one);
+    await __ytSleep(800);
+  }
+  var allOk = results.every(function (r) {
+    return r.ok;
+  });
+  return {
+    ok: allOk,
+    translationsUrl: translationsUrl,
+    results: results,
+  };
+}
+
+/**
+ * 在上传对话框 DETAILS 阶段尝试上传字幕（避免保存后跳转丢上下文）。
+ * Studio 不同版本可能没有此入口；失败时由调用方回退到 translations 流程。
+ */
+async function __ytTryUploadCaptionsInDialog(captions) {
+  if (!captions || !captions.length) return { skipped: true };
+  var dialog = __ytGetUploadsDialog();
+  if (!dialog) return { ok: false, error: "no dialog" };
+
+  var out = { ok: false, results: [], via: "details-dialog" };
+  // 展开更多 / 字幕区
+  __ytClickByText(["显示更多", "Show more", "字幕", "Subtitles", "Captions"], dialog);
+  await __ytSleep(500);
+
+  for (var i = 0; i < captions.length; i++) {
+    var cap = captions[i];
+    var file = cap.base64
+      ? __ytBase64ToFile(cap.base64, cap.name, cap.mime)
+      : null;
+    if (!file) {
+      out.results.push({ language: cap.language, ok: false, error: "no file" });
+      continue;
+    }
+    var uploadBtn = __ytClickByText(
+      ["上传文件", "Upload file", "上传字幕", "Upload subtitles", "添加字幕"],
+      dialog,
+    );
+    await __ytSleep(600);
+    var input =
+      __ytDeepQuery('input[type=file]', dialog) ||
+      __ytDeepQuery("input[type=file]");
+    if (!input || !__ytAssignFileToInput(input, file)) {
+      out.results.push({
+        language: cap.language,
+        ok: false,
+        error: "file input not found in details",
+        uploadBtn: uploadBtn.ok,
+      });
+      continue;
+    }
+    // 选语言（若弹出）
+    await __ytSleep(500);
+    __ytClickByText(__ytCaptionLanguageLabels(cap.language), dialog);
+    await __ytSleep(400);
+    out.results.push({ language: cap.language, name: cap.name, ok: true });
+  }
+  out.ok = out.results.length > 0 && out.results.every(function (r) {
+    return r.ok;
+  });
+  return out;
 }
