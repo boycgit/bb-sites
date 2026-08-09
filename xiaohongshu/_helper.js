@@ -590,3 +590,302 @@ async function xhsDraftEnsureArticlePage() {
   }
   return ed;
 }
+// ---------------------------------------------------------------------------
+// 小红书「视频笔记」草稿 helpers（target=video）
+// ---------------------------------------------------------------------------
+
+const XHS_VIDEO_PUBLISH_URL =
+  "https://creator.xiaohongshu.com/publish/publish?source=official&from=tab_switch&target=video";
+const XHS_VIDEO_TITLE_MAX = 20;
+const XHS_VIDEO_DESC_MAX = 1000;
+
+function xhsVideoSleep(ms) {
+  return new Promise(function (r) {
+    setTimeout(r, ms);
+  });
+}
+
+function xhsVideoClickByText(labels, root) {
+  root = root || document;
+  if (typeof labels === "string") labels = [labels];
+  var nodes = root.querySelectorAll(
+    "button, a, span, div, label, li, [role=button], [role=menuitem], [role=option]",
+  );
+  for (var L = 0; L < labels.length; L++) {
+    var label = labels[L];
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      var t = ((el.innerText || el.textContent || "") + "").replace(/\s+/g, " ").trim();
+      if (!t || t.length > label.length + 48) continue;
+      if (t === label || t.indexOf(label) === 0 || (label.length >= 2 && t.indexOf(label) >= 0)) {
+        try {
+          el.click();
+          return { ok: true, text: t, label: label };
+        } catch (e) {
+          try {
+            el.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+            return { ok: true, text: t, label: label, via: "dispatch" };
+          } catch (e2) {}
+        }
+      }
+    }
+  }
+  return { ok: false, labels: labels };
+}
+
+function xhsVideoEnsureLogin() {
+  var u = xhsDraftGetUser();
+  if (!u || !u.userId) {
+    return {
+      error: "Not logged in",
+      hint: 'Open and log in: bb-browser open "' + XHS_VIDEO_PUBLISH_URL + '"',
+    };
+  }
+  return u;
+}
+
+async function xhsVideoEnsurePublishPage() {
+  var href = location.href || "";
+  var onCreator = /creator\.xiaohongshu\.com/i.test(href);
+  var onVideo =
+    /target=video/i.test(href) ||
+    (/publish\/publish/i.test(href) && /视频|上传视频|添加视频/i.test(document.body.innerText || ""));
+  if (!onCreator || !onVideo) {
+    location.href = XHS_VIDEO_PUBLISH_URL;
+    await xhsVideoSleep(3500);
+  }
+  // 若仍在图文/长文 tab，尝试点「上传视频」
+  var body = document.body.innerText || "";
+  if (!/上传视频|添加视频|选择视频|拖拽视频/i.test(body)) {
+    xhsVideoClickByText(["上传视频", "发视频", "视频", "Video"]);
+    await xhsVideoSleep(1500);
+  }
+  return { ok: true, href: location.href };
+}
+
+function xhsVideoFindFileInput() {
+  var inputs = document.querySelectorAll('input[type=file]');
+  for (var i = 0; i < inputs.length; i++) {
+    var acc = (inputs[i].getAttribute("accept") || "").toLowerCase();
+    if (acc.indexOf("video") >= 0 || acc.indexOf("mp4") >= 0 || acc.indexOf("mov") >= 0) {
+      return inputs[i];
+    }
+  }
+  // 回退：页面上唯一/可见的 file input
+  return document.querySelector('input[type=file]');
+}
+
+async function xhsVideoMountFromBlob(args) {
+  var blob = window.__bbLocalVideoBlob;
+  if (!blob && !(args && (args.__localVideoCdpMounted === "1" || args.__localVideoMountMode === "fileInput"))) {
+    return {
+      error: "Local video not injected",
+      hint: "CLI/daemon must inject video via CDP setFileInputFiles or Blob",
+    };
+  }
+
+  // CDP 已挂文件：等待上传进度即可
+  if (args && (args.__localVideoCdpMounted === "1" || args.__localVideoMountMode === "fileInput")) {
+    return {
+      ok: true,
+      via: "cdp-fileInput",
+      name: (args && args.__localVideoName) || "video.mp4",
+      size: Number((args && args.__localVideoSize) || 0) || undefined,
+    };
+  }
+
+  var input = xhsVideoFindFileInput();
+  if (!input) {
+    for (var w = 0; w < 20; w++) {
+      await xhsVideoSleep(400);
+      input = xhsVideoFindFileInput();
+      if (input) break;
+      xhsVideoClickByText(["上传视频", "添加视频", "选择视频", "上传"]);
+    }
+  }
+  if (!input) {
+    return {
+      error: "Video file input not found",
+      hint: "Stay on creator video publish page: " + XHS_VIDEO_PUBLISH_URL,
+      href: location.href,
+    };
+  }
+
+  var name = window.__bbLocalVideoBlobName || (args && args.__localVideoName) || "video.mp4";
+  var mime = window.__bbLocalVideoBlobMime || (args && args.__localVideoMime) || blob.type || "video/mp4";
+  var file;
+  try {
+    file = new File([blob], name, { type: mime, lastModified: Date.now() });
+  } catch (e) {
+    file = blob;
+  }
+  try {
+    var dt = new DataTransfer();
+    dt.items.add(file);
+    try {
+      var desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
+      if (desc && desc.set) desc.set.call(input, dt.files);
+      else input.files = dt.files;
+    } catch (e2) {
+      input.files = dt.files;
+    }
+    input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+  } catch (e) {
+    return { error: "Failed to assign File to input", hint: String(e) };
+  }
+  return { ok: true, via: "blob", name: name, size: blob.size };
+}
+
+async function xhsVideoWaitUpload(timeoutMs) {
+  timeoutMs = timeoutMs || 180000;
+  var start = Date.now();
+  var last = "";
+  while (Date.now() - start < timeoutMs) {
+    var text = ((document.body && document.body.innerText) || "").replace(/\s+/g, " ");
+    last = text.slice(0, 240);
+    if (/上传失败|格式不支持|文件过大|出错了|Something went wrong/i.test(text) && !/上传中|处理中|%/.test(text)) {
+      return { error: "Xiaohongshu video upload failed", hint: last };
+    }
+    // 上传完成：出现标题/正文编辑区，且不再是纯上传 dropzone
+    var hasTitle =
+      !!document.querySelector('input[placeholder*="标题"]') ||
+      !!document.querySelector('textarea[placeholder*="标题"]') ||
+      !!document.querySelector('[contenteditable="true"][data-placeholder*="标题"]') ||
+      !!document.querySelector('input[placeholder*="填写标题"]');
+    var hasDesc =
+      !!document.querySelector('[contenteditable="true"]') ||
+      !!document.querySelector('textarea[placeholder*="添加"]') ||
+      !!document.querySelector('div[data-placeholder*="正文"]');
+    var uploading = /上传中|处理中|合成中|\d+\s*%|正在上传/i.test(text);
+    if ((hasTitle || hasDesc) && !uploading) {
+      await xhsVideoSleep(800);
+      return { ok: true, elapsedMs: Date.now() - start };
+    }
+    if (/上传成功|上传完成|处理完成/i.test(text) && (hasTitle || hasDesc)) {
+      return { ok: true, elapsedMs: Date.now() - start };
+    }
+    await xhsVideoSleep(800);
+  }
+  return {
+    error: "Timeout waiting for Xiaohongshu video upload / edit form",
+    hint: "last=" + last + " href=" + location.href,
+  };
+}
+
+function xhsVideoSetInputValue(el, value) {
+  if (!el) return false;
+  var text = String(value || "");
+  try {
+    el.focus();
+    if (el.isContentEditable || el.getAttribute("contenteditable") === "true") {
+      var sel = window.getSelection();
+      var range = document.createRange();
+      range.selectNodeContents(el);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      var ok = false;
+      try {
+        ok = document.execCommand("insertText", false, text);
+      } catch (e) {
+        ok = false;
+      }
+      if (!ok) {
+        el.textContent = text;
+        el.innerText = text;
+      }
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertText" }));
+      el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+      return true;
+    }
+    var proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    var setter = Object.getOwnPropertyDescriptor(proto, "value");
+    if (setter && setter.set) setter.set.call(el, text);
+    else el.value = text;
+    el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function xhsVideoFillMetadata(cfg) {
+  var title = String(cfg.title || "").slice(0, XHS_VIDEO_TITLE_MAX);
+  var desc = String(cfg.desc || "").slice(0, XHS_VIDEO_DESC_MAX);
+  var tags = Array.isArray(cfg.tags) ? cfg.tags.map(String) : [];
+
+  var titleEl =
+    document.querySelector('input[placeholder*="标题"]') ||
+    document.querySelector('textarea[placeholder*="标题"]') ||
+    document.querySelector('input[placeholder*="填写标题"]') ||
+    document.querySelector('[contenteditable="true"][data-placeholder*="标题"]');
+  var titleOk = xhsVideoSetInputValue(titleEl, title);
+  await xhsVideoSleep(300);
+
+  // 正文/描述：优先带「添加正文/描述」占位的 contenteditable
+  var descEl = null;
+  var editables = document.querySelectorAll('[contenteditable="true"], textarea');
+  for (var i = 0; i < editables.length; i++) {
+    var el = editables[i];
+    if (el === titleEl) continue;
+    var ph =
+      (el.getAttribute("data-placeholder") || "") +
+      (el.getAttribute("placeholder") || "") +
+      (el.getAttribute("aria-label") || "");
+    if (/正文|描述|添加|说说|写点|caption|desc/i.test(ph)) {
+      descEl = el;
+      break;
+    }
+  }
+  if (!descEl) {
+    for (var j = 0; j < editables.length; j++) {
+      if (editables[j] !== titleEl) {
+        descEl = editables[j];
+        break;
+      }
+    }
+  }
+
+  // 话题写入描述末尾
+  var body = desc;
+  if (tags.length) {
+    var tagStr = tags
+      .map(function (t) {
+        t = String(t).replace(/^#/, "").trim();
+        return t ? "#" + t : "";
+      })
+      .filter(Boolean)
+      .join(" ");
+    if (tagStr) body = (body ? body + "\n" : "") + tagStr;
+  }
+  body = body.slice(0, XHS_VIDEO_DESC_MAX);
+  var descOk = xhsVideoSetInputValue(descEl, body);
+  await xhsVideoSleep(300);
+
+  return {
+    titleOk: titleOk,
+    descOk: descOk,
+    title: title,
+    desc: body,
+    tags: tags,
+  };
+}
+
+/**
+ * 尽量点「存草稿 / 暂存」；没有则停留编辑页（不点发布）。
+ */
+async function xhsVideoSaveDraft() {
+  var labels = ["存草稿", "保存草稿", "暂存", "保存", "Draft"];
+  var r = xhsVideoClickByText(labels);
+  if (r.ok) {
+    await xhsVideoSleep(2000);
+    return { ok: true, via: "button", text: r.text };
+  }
+  // 平台可能自动保存到「草稿箱」；未找到按钮不算失败
+  return {
+    ok: true,
+    via: "stay-edit",
+    hint: "未找到存草稿按钮，已停留在编辑页，请人工确认后发布",
+  };
+}

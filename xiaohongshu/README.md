@@ -1,9 +1,16 @@
 # xiaohongshu — 小红书
 
 读类命令（`search` / `feed` / `note` 等）跑在 `www.xiaohongshu.com`。  
-**长文草稿**命令跑在创作者平台 `creator.xiaohongshu.com`。
+创作者草稿命令跑在 `creator.xiaohongshu.com`：
 
-## draft-create
+| 命令 | 形态 |
+|------|------|
+| `xiaohongshu/draft-create` | **长文**笔记（Markdown → 富文本） |
+| `xiaohongshu/video-draft-create` | **视频**笔记（本地 mp4 + 标题/描述/话题） |
+
+---
+
+## draft-create（长文）
 
 将本地 Markdown **渲染为富文本** 写入创作者 **长文草稿**（浏览器本地 IndexedDB），并上传文中图片；视频尽量上传（长文编辑器可能无内嵌视频节点，需在 UI 手动插入）。
 
@@ -17,7 +24,7 @@ bb-browser site xiaohongshu/draft-create ./draft.md --configFile ./draft-publish
 ### 重要限制
 
 | 项 | 说明 |
-|----|------|
+|------|------|
 | 存储 | 草稿在**当前浏览器本地**，清除站点数据会删除 |
 | Markdown | 平台不支持 md 源码，adapter 会先渲染再写入编辑器 |
 | 标题 | 最多 **64** 字 |
@@ -44,9 +51,50 @@ config 字段：`{ "title": "标题" }`（缺省取 md 一级标题，上限 64 
 | `manageHint` | 草稿箱入口说明 |
 | `uploadedImages` / `uploadedVideos` | 上传统计 |
 
+---
+
+## video-draft-create（视频笔记）
+
+上传本地视频到创作者 **发视频** 页，填写标题/描述/话题，尽量点「存草稿」（若无按钮则停留编辑页，**不自动发布**）。
+
+```bash
+bb-browser open "https://creator.xiaohongshu.com/publish/publish?source=official&from=tab_switch&target=video"
+
+bb-browser site xiaohongshu/video-draft-create --video ./a.mp4 --configFile ./draft-publish.config.json --json
+```
+
+### 重要限制
+
+| 项 | 说明 |
+|------|------|
+| 登录 | 必须已在 bb-browser Chrome 登录创作者平台 |
+| 标题 | 建议 **20** 字以内（平台短标题） |
+| 描述 | 建议 **1000** 字以内；话题可写在 config.tags，会拼到描述末尾 `#话题` |
+| 不自动发布 | 只写草稿 / 停留编辑页，人工检查后发布 |
+| 挂载 | CLI 注入 Blob 或 CDP file input；大文件优先 blob 路径 |
+
+### 参数（config-first）
+
+| 参数 | 说明 |
+|------|------|
+| `--video` | 本地 mp4 路径 |
+| `--config` / `--configFile` | JSON：`{ "title", "tags", "desc" }` |
+
+### 返回
+
+| 字段 | 说明 |
+|------|------|
+| `editUrl` / `draftUrl` | 当前视频发布/编辑页 |
+| `manageUrl` | 创作者发布入口 |
+| `filled` | 标题/描述是否写入成功 |
+| `warnings` | 未找到存草稿按钮等提示 |
+
+---
+
 ### 文件
 
 | 文件 | 作用 |
 |------|------|
-| `draft-create.js` | 主命令 |
-| `_helper.js` | 登录、webpack 上传、md→doc、TipTap 写入 |
+| `draft-create.js` | 长文草稿主命令 |
+| `video-draft-create.js` | 视频笔记草稿主命令 |
+| `_helper.js` | 登录、长文 TipTap、视频上传/填表 helpers |
