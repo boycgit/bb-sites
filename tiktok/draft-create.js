@@ -1,10 +1,10 @@
 /* @meta
 {
   "name": "tiktok/draft-create",
-  "description": "按 JSON config 上传本地视频到 TikTok Studio 未发布编辑页（不自动发布）",
+  "description": "按 JSON config 上传本地硬字幕视频到 TikTok Studio 未发布编辑页（不自动发布；平台无软字幕轨）",
   "domain": "www.tiktok.com",
   "args": {
-    "config": { "required": false, "description": "JSON 内容：{video,title,tags,desc}（与 configFile 二选一）" },
+    "config": { "required": false, "description": "JSON：{video,title,tags,desc}；video 建议为硬字幕成片（与 configFile 二选一）" },
     "configFile": { "required": false, "description": "本地 JSON 配置文件路径，内容为 {video,title,tags,desc}" }
   },
   "capabilities": ["network", "write"],
@@ -44,10 +44,19 @@ async function (args) {
     return { error: "Invalid config JSON", hint: String(e) };
   }
 
-  if (!cfg.video && !args.video && !args.__localVideoName) {
+  // CLI 会把 config.video 解析为注入参数后从 config 中移除，只保留 title/tags/desc；
+  // 运行时以 args.video / __localVideoName / CDP 挂载标志为准。
+  if (
+    !cfg.video &&
+    !args.video &&
+    !args.__localVideoName &&
+    args.__localVideoCdpMounted !== "1" &&
+    args.__localVideoReady !== "1"
+  ) {
     return {
       error: "Missing config field: video",
-      hint: 'Set "video" to a local video path in --config / --configFile JSON',
+      hint:
+        'Set "video" to a local hardsub mp4 path in --config / --configFile JSON (e.g. ../distribution.en.mp4)',
     };
   }
 
@@ -91,18 +100,26 @@ async function (args) {
   var upText = (upEl && (upEl.innerText || upEl.textContent)) || "";
 
   if (!real.ok) {
+    var pe = __ttGetUploadError();
     return {
-      error: "TikTok Studio did not reach the uploaded state",
-      hint: __ttGetUploadError() || "Missing 已上传 / Upload complete status; the edit page is not a usable draft",
+      error: pe
+        ? "TikTok Studio 上传失败：" + pe
+        : "TikTok Studio 未达到「已上传」状态",
+      hint: pe
+        ? __ttUploadErrorHint(pe)
+        : "页面未出现 已上传 / Upload complete。请确认在 upload 页、已登录，并使用硬字幕 mp4。",
       uploaded: false,
       uploadStatus: upText.slice(0, 200),
       mount: { name: mount.name, size: mount.size },
     };
   }
   if (!filled.captionOk && !filled.descOk) {
+    var pe2 = __ttGetUploadError();
     return {
-      error: "TikTok Studio caption editor was not filled",
-      hint: __ttGetUploadError() || "The video uploaded, but the unpublished edit page is incomplete",
+      error: "TikTok Studio 视频描述未写入",
+      hint: pe2
+        ? __ttUploadErrorHint(pe2)
+        : "视频可能已上传，但描述编辑器未就绪或仍停留在「出错了，请重试」页。",
       uploaded: true,
       uploadStatus: upText.slice(0, 200),
       mount: { name: mount.name, size: mount.size },

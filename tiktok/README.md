@@ -4,6 +4,17 @@
 
 上传**本地视频**到 [TikTok Studio](https://www.tiktok.com/tiktokstudio/upload) 并填写元数据。
 
+### 硬字幕（重要）
+
+TikTok Studio **没有**独立的字幕文件上传入口。中英文投稿均应使用 **硬字幕成片**（字幕已烧录进画面），例如：
+
+| 语种 | 短视频 | 长视频 |
+|------|--------|--------|
+| 中文 | `distribution.zh.mp4` | `{uniName}.zh.mp4` |
+| 英文 | `distribution.en.mp4` | `{uniName}.en.mp4` |
+
+不要传 `*.unsub.*` 无字幕视频（那是 YouTube 等多语言软字幕渠道用的）。
+
 ### 未发布编辑页链接
 
 TikTok Studio **没有**类似抖音「未发布草稿箱」的可分享地址。本 adapter：
@@ -19,8 +30,14 @@ TikTok Studio **没有**类似抖音「未发布草稿箱」的可分享地址�
 ```bash
 bb-browser open "https://www.tiktok.com/tiktokstudio/upload?from=creator_center&tab=video"
 
+# 英文硬字幕短视频
 bb-browser site tiktok/draft-create \
-  --config '{"video":"./distribution.mp4","title":"标题","tags":["算法","教程"],"desc":"简介"}' \
+  --config '{"video":"./distribution.en.mp4","title":"Title","tags":["algorithm","tutorial"],"desc":"Description"}' \
+  --json
+
+# 中文硬字幕
+bb-browser site tiktok/draft-create \
+  --configFile ./draft-publish.config.json \
   --json
 ```
 
@@ -37,9 +54,16 @@ bb-browser site tiktok/draft-create \
 
 | config | 页面 |
 |--------|------|
-| `video` | 本地视频路径；CLI 解析后注入页面文件控件 |
+| `video` | 本地**硬字幕**视频路径；CLI 解析后注入页面文件控件 |
 | `title` + `desc` + `tags` | 合并写入「视频描述」caption（Draft.js，上限约 4000 字） |
 | `tags` | 以 `#tag` 形式追加到 caption 末尾 |
+
+可选诊断字段（Azura 写入临时 config，adapter 可忽略）：
+
+| 字段 | 说明 |
+|------|------|
+| `videoProjectRel` | 项目内相对路径，如 `video/publish/distribution.en.mp4` |
+| `subtitleMode` | 固定 `hardsub` |
 
 ### 注意
 
@@ -47,3 +71,4 @@ bb-browser site tiktok/draft-create \
 - 大视频由 CLI 解析 config.video，daemon 优先通过 CDP `setFileInputFiles` 注入（Blob 仅作回退）
 - 若页面已有未完成投稿，adapter 会尝试「放弃」后再上传
 - **绝不**自动点「发布」
+- **不支持**单独上传 .srt / .ass 软字幕

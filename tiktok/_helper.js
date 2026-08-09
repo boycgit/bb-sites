@@ -210,6 +210,15 @@ async function __ttMountVideo(args) {
 
   // IMPORTANT: when daemon already set files via CDP, do NOT click 放弃 — that cancels the in-flight upload.
   if (cdpMounted) {
+    var pe0 = __ttGetUploadError();
+    if (pe0) {
+      return {
+        error: "TikTok Studio 上传失败：" + pe0,
+        hint: __ttUploadErrorHint(pe0),
+        via: "cdp-fileInput",
+        name: (args && args.__localVideoName) || "video.mp4",
+      };
+    }
     var realNow = __ttIsRealUploadReady();
     if (realNow.ok || realNow.uploading) {
       return {
@@ -222,8 +231,17 @@ async function __ttMountVideo(args) {
       };
     }
     // Soft wait for real progress / 已上传 (do not discard; do not trust caption alone)
-    for (var wi = 0; wi < 40; wi++) {
+    for (var wi = 0; wi < 90; wi++) {
       await __ttSleep(500);
+      pe0 = __ttGetUploadError();
+      if (pe0) {
+        return {
+          error: "TikTok Studio 上传失败：" + pe0,
+          hint: __ttUploadErrorHint(pe0),
+          via: "cdp-fileInput",
+          name: (args && args.__localVideoName) || "video.mp4",
+        };
+      }
       realNow = __ttIsRealUploadReady();
       if (realNow.ok || realNow.uploading) {
         return {
@@ -386,6 +404,8 @@ function __ttGetUploadError() {
     /格式不支持[^。！!\n]*/i,
     /文件过大[^。！!\n]*/i,
     /出错了\s*请重试/i,
+    /出错了/i,
+    /请重试/i,
     /Upload failed[^.！!\n]*/i,
     /Something went wrong\s*(?:Please try again)?/i,
     /not supported[^.！!\n]*/i,
@@ -395,7 +415,32 @@ function __ttGetUploadError() {
     var match = text.match(patterns[i]);
     if (match) return match[0].trim();
   }
+  // 空壳重试页：机器人插画 + 「出错了」标题，无上传控件
+  if (
+    /出错了/.test(text) &&
+    /重试|请重试|Try again/i.test(text) &&
+    !document.querySelector('[data-e2e="caption_container"]') &&
+    !document.querySelector('[data-e2e="upload_status_container"]') &&
+    !document.querySelector('input[type=file][accept*="video"]')
+  ) {
+    return "出错了，请重试（TikTok Studio 空壳错误页）";
+  }
   return "";
+}
+
+/** 针对 Studio 空壳错误页给出中文操作建议 */
+function __ttUploadErrorHint(uploadError) {
+  var err = String(uploadError || "");
+  if (/出错了|请重试|Something went wrong|空壳/i.test(err)) {
+    return (
+      "TikTok Studio 显示「出错了，请重试」空壳页（上传链路失败，不是 Azura 文案问题）。" +
+      "请：1) 打开 https://www.tiktok.com/tiktokstudio/upload?from=creator_center&tab=video 并登录；" +
+      "2) 点「重试」或「放弃」未完成投稿；" +
+      "3) 使用硬字幕成片（distribution.en.mp4 / distribution.zh.mp4，不要 unsub）；" +
+      "4) 再从 Azura 点发布到草稿。"
+    );
+  }
+  return err || "请检查 TikTok Studio 上传页状态后重试";
 }
 
 /**
@@ -410,7 +455,10 @@ async function __ttWaitEditForm(timeoutMs) {
     last = text.slice(0, 280);
     var uploadError = __ttGetUploadError();
     if (uploadError) {
-      return { error: "TikTok Studio upload failed: " + uploadError, hint: last };
+      return {
+        error: "TikTok Studio 上传失败：" + uploadError,
+        hint: __ttUploadErrorHint(uploadError) + " | page=" + last.slice(0, 160),
+      };
     }
 
     var real = __ttIsRealUploadReady();
