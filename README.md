@@ -6,7 +6,7 @@ Each site adapter is a JS function that runs inside your browser via `bb-browser
 
 [English](README.md) · [中文](README.zh-CN.md)
 
-> **103 adapters** across **37 platforms** — and growing.
+> **104 adapters** across **38 platforms** — and growing.
 
 ## Quick Start
 
@@ -118,6 +118,7 @@ bb-browser site reddit/thread <url>        # run with args
 | Platform | Command | Description |
 |----------|---------|-------------|
 | ChatGPT | `chatgpt/image-create` | Generate images on chatgpt.com/images, with optional reference images, and download the results |
+| Gemini | `gemini/image-create` | Switch gemini.google.com/app into image mode, generate from a prompt with optional reference images, and download the results |
 
 ### 🗨️ Social Apps
 

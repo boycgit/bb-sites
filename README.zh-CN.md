@@ -6,7 +6,7 @@
 
 [English](README.md) · [中文](README.zh-CN.md)
 
-> **103 个适配器**，覆盖 **37 个平台** — 持续增长中。
+> **104 个适配器**，覆盖 **38 个平台** — 持续增长中。
 
 ## 快速开始
 
@@ -118,6 +118,7 @@ bb-browser site reddit/thread <url>        # 带参数运行
 | 平台 | 命令 | 说明 |
 |------|------|------|
 | ChatGPT | `chatgpt/image-create` | chatgpt.com/images 按提示词生图，可带参考图，并下载结果 |
+| Gemini | `gemini/image-create` | gemini.google.com/app 切换到图片模式后按提示词生图，可带参考图，并下载结果 |
 
 ### 🗨️ 即时通讯
 
