@@ -6,7 +6,7 @@
 
 [English](README.md) · [中文](README.zh-CN.md)
 
-> **102 个适配器**，覆盖 **36 个平台** — 持续增长中。
+> **103 个适配器**，覆盖 **37 个平台** — 持续增长中。
 
 ## 快速开始
 
@@ -112,6 +112,12 @@ bb-browser site reddit/thread <url>        # 带参数运行
 |------|------|------|
 | 有道翻译 | `youdao/translate` | 翻译/词典查询 |
 | 携程 | `ctrip/search` | 目的地景点搜索 |
+
+### 🎨 AI 生图
+
+| 平台 | 命令 | 说明 |
+|------|------|------|
+| ChatGPT | `chatgpt/image-create` | chatgpt.com/images 按提示词生图，可带参考图，并下载结果 |
 
 ### 🗨️ 即时通讯
 
