@@ -6,7 +6,7 @@
 
 [English](README.md) · [中文](README.zh-CN.md)
 
-> **104 个适配器**，覆盖 **38 个平台** — 持续增长中。
+> **106 个适配器**，覆盖 **39 个平台** — 持续增长中。
 
 ## 快速开始
 
@@ -76,6 +76,7 @@ bb-browser site reddit/thread <url>        # 带参数运行
 | Genius | `genius/search` | 歌曲/歌词搜索 |
 | 豆瓣 | `douban/search`, `douban/movie`, `douban/movie-hot`, `douban/movie-top`, `douban/top250`, `douban/comments` | 豆瓣电影 — 搜索、详情、排行、Top 250、短评 |
 | 起点中文网 | `qidian/search` | 小说搜索 |
+| Pixabay | `pixabay/music-search`, `pixabay/sound-effects-search` | 免版税音乐 / 音效搜索（关键词与官网筛选、排序、分页） |
 
 ### 💼 求职招聘
 

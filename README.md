@@ -6,7 +6,7 @@ Each site adapter is a JS function that runs inside your browser via `bb-browser
 
 [English](README.md) · [中文](README.zh-CN.md)
 
-> **104 adapters** across **38 platforms** — and growing.
+> **106 adapters** across **39 platforms** — and growing.
 
 ## Quick Start
 
@@ -76,6 +76,7 @@ bb-browser site reddit/thread <url>        # run with args
 | Genius | `genius/search` | Song/lyrics search |
 | Douban | `douban/search`, `douban/movie`, `douban/movie-hot`, `douban/movie-top`, `douban/top250`, `douban/comments` | Douban (豆瓣) movies — search, details, rankings, Top 250, reviews |
 | Qidian | `qidian/search` | Qidian (起点中文网) novel search |
+| Pixabay | `pixabay/music-search`, `pixabay/sound-effects-search` | Royalty-free music and sound-effects search (query, filters, sort, page) |
 
 ### 💼 Jobs & Career
 
