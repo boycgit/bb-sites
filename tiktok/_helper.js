@@ -505,51 +505,58 @@ async function __ttWaitEditForm(timeoutMs) {
 function __ttSetDraftEditor(el, value) {
   if (!el) return false;
   var text = String(value || "");
+  var read = function () {
+    return ((el.innerText || el.textContent || "") + "").trim();
+  };
   try {
+    // 已是目标内容时直接返回，避免 Draft.js 反复重建内部 DOM
+    if (read() === text.trim()) return true;
+
     el.focus();
-    // Select all content then insertText so Draft.js listeners fire
-    var sel = window.getSelection();
-    var range = document.createRange();
-    range.selectNodeContents(el);
-    sel.removeAllRanges();
-    sel.addRange(range);
-    var ok = false;
+
+    // 先清空 Draft.js 里已有的内容（例如 TikTok 自动带入的视频文件名）。
+    // 用 selectAll + delete 走原生编辑命令，不要手写 textContent/innerText。
     try {
-      ok = document.execCommand("insertText", false, text);
-    } catch (e) {
-      ok = false;
+      document.execCommand("selectAll", false, null);
+      document.execCommand("delete", false, null);
+    } catch (e0) {
+      /* ignore */
     }
-    if (!ok) {
-      try {
-        document.execCommand("selectAll", false, null);
-        ok = document.execCommand("insertText", false, text);
-      } catch (e2) {
-        ok = false;
-      }
+
+    // 首选整段粘贴：一次写入完整文案，Draft.js 会原生处理 #话题标签。
+    // 逐字符 execCommand 会被 TikTok 的话题联想逻辑拖到极慢，且大批量字符
+    // 插入会触发 React removeChild 崩溃，页面退化成「出错了 请重试」。
+    try {
+      var dt = new DataTransfer();
+      dt.setData("text/plain", text);
+      el.dispatchEvent(
+        new ClipboardEvent("paste", {
+          clipboardData: dt,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    } catch (e1) {
+      /* ignore */
     }
-    if (!ok) {
-      el.textContent = text;
-      el.innerText = text;
+
+    var after = read();
+    if (after === text.trim()) return true;
+
+    // 兜底：整体 insertText（仅在粘贴失效时使用）
+    try {
+      var sel = window.getSelection();
+      var range = document.createRange();
+      range.selectNodeContents(el);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.execCommand("insertText", false, text);
+    } catch (e2) {
+      /* ignore */
     }
-    el.dispatchEvent(
-      new InputEvent("input", {
-        bubbles: true,
-        composed: true,
-        data: text,
-        inputType: "insertText",
-      }),
-    );
-    el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-    el.dispatchEvent(new Event("blur", { bubbles: true, composed: true }));
-    return true;
+    return read().length > 0;
   } catch (e3) {
-    try {
-      el.textContent = text;
-      el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-      return true;
-    } catch (e4) {
-      return false;
-    }
+    return false;
   }
 }
 

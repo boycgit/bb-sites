@@ -127,15 +127,52 @@ async function (args) {
   }
 
   var finalEditUrl = location.href || __TT_UPLOAD_URL;
+  var draftBoxUrl = "https://www.tiktok.com/tiktokstudio/content?tab=draft";
+
+  // 保存草稿：TikTok Studio 的「保存草稿」会把草稿写入草稿箱并跳转到
+  // /tiktokstudio/content?tab=draft。点击后页面会导航、评估上下文会被销毁，
+  // 因此这里只触发点击并立即返回，不做点击后的二次校验。
+  var saveBtn = document.querySelector('button[data-e2e="save_draft_button"]');
+  if (!saveBtn) {
+    var saveCandidates = [].slice
+      .call(document.querySelectorAll('button,[role="button"]'))
+      .filter(function (el) {
+        var t = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+        return /^(保存草稿|存草稿|Save draft)$/i.test(t);
+      });
+    saveBtn = saveCandidates[0] || null;
+  }
+
+  var draftSaved = false;
+  var draftSaveError = "";
+  if (
+    saveBtn &&
+    !saveBtn.disabled &&
+    saveBtn.getAttribute("aria-disabled") !== "true"
+  ) {
+    try {
+      saveBtn.scrollIntoView({ block: "center" });
+      saveBtn.click();
+      draftSaved = true;
+    } catch (e) {
+      draftSaveError = "保存草稿按钮点击失败：" + String(e);
+    }
+  } else {
+    draftSaveError =
+      "未找到可用的「保存草稿」按钮（button[data-e2e=save_draft_button]）";
+  }
+
   var out = {
     title: title,
     tags: tags,
     desc: desc,
     caption: filled.caption || null,
-    state: "edit",
-    draftUrl: finalEditUrl,
+    state: draftSaved ? "drafted" : "edit",
+    draftSaved: draftSaved,
+    draftSaveError: draftSaveError || undefined,
+    draftUrl: draftSaved ? draftBoxUrl : finalEditUrl,
     editUrl: finalEditUrl,
-    manageUrl: __TT_MANAGE_URL,
+    manageUrl: draftBoxUrl,
     uploadUrl: __TT_UPLOAD_URL,
     via: "ui",
     uploadElapsedMs: wait.elapsedMs,
@@ -148,8 +185,10 @@ async function (args) {
       editorText: filled.editorText || "",
     },
     mount: { name: mount.name, size: mount.size },
-    hint:
-      "已上传并填写 TikTok Studio 未发布编辑页；未点发布。draftUrl/editUrl 仅用于定位当前编辑标签页，请保留该页继续二次编辑，关闭后内容可能丢失。manageUrl 仅展示已发布/预约内容，不是草稿箱。",
+    hint: draftSaved
+      ? "已上传、填写并点击「保存草稿」；页面会跳到草稿箱 tiktokstudio/content?tab=draft（未点发布）。"
+      : "已上传并填写 TikTok Studio 未发布编辑页；未点发布。" +
+        (draftSaveError ? "未能保存草稿：" + draftSaveError : ""),
   };
 
   var warnings = [];
